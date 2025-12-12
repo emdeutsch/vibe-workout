@@ -1,16 +1,10 @@
 /**
- * Authentication middleware
+ * Authentication middleware using Supabase Auth
  */
 
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { getConfig } from '../config.js';
-import { userDb } from '../db.js';
-
-export interface JwtPayload {
-  userId: string;
-  deviceId?: string;
-}
+import { verifyToken } from '../lib/supabase.js';
+import { profileDb } from '../db.js';
 
 declare global {
   namespace Express {
@@ -25,13 +19,13 @@ declare global {
 }
 
 /**
- * Require valid JWT authentication
+ * Require valid Supabase authentication
  */
-export function requireAuth(
+export async function requireAuth(
   req: Request,
   res: Response,
   next: NextFunction
-): void {
+): Promise<void> {
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith('Bearer ')) {
@@ -42,35 +36,60 @@ export function requireAuth(
   const token = authHeader.slice(7);
 
   try {
-    const config = getConfig();
-    const payload = jwt.verify(token, config.jwt.secret) as JwtPayload;
-
-    const user = userDb.findById(payload.userId);
-    if (!user) {
-      res.status(401).json({ error: 'User not found' });
+    // Verify token with Supabase
+    const supabaseUser = await verifyToken(token);
+    if (!supabaseUser) {
+      res.status(401).json({ error: 'Invalid token' });
       return;
     }
 
+    // Get device ID from custom header (set by mobile app)
+    const deviceId = req.headers['x-device-id'] as string | undefined;
+
     req.user = {
-      id: user.id,
-      email: user.email,
+      id: supabaseUser.id,
+      email: supabaseUser.email ?? '',
     };
-    req.deviceId = payload.deviceId;
+    req.deviceId = deviceId;
 
     next();
   } catch (error) {
+    console.error('Auth error:', error);
     res.status(401).json({ error: 'Invalid token' });
   }
 }
 
 /**
- * Generate a JWT for a user
+ * Optional auth - sets user if token present, but doesn't require it
  */
-export function generateToken(payload: JwtPayload): string {
-  const config = getConfig();
-  return jwt.sign(payload, config.jwt.secret, {
-    expiresIn: config.jwt.expiresIn,
-  });
+export async function optionalAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith('Bearer ')) {
+    next();
+    return;
+  }
+
+  const token = authHeader.slice(7);
+
+  try {
+    const supabaseUser = await verifyToken(token);
+    if (supabaseUser) {
+      req.user = {
+        id: supabaseUser.id,
+        email: supabaseUser.email ?? '',
+      };
+      req.deviceId = req.headers['x-device-id'] as string | undefined;
+    }
+  } catch {
+    // Ignore errors - auth is optional
+  }
+
+  next();
 }
 
 /**

@@ -1,248 +1,367 @@
 /**
- * In-memory database for MVP
- * Replace with PostgreSQL/SQLite for production
+ * Database operations using Prisma with Supabase
  */
 
-import type {
-  User,
-  Device,
-  GatedRepository,
-  RunSession,
-  RunState,
-} from '@viberunner/shared';
-import { nanoid } from 'nanoid';
+import prisma from './lib/prisma.js';
+import type { Profile, Device, GatedRepository, RunSession } from '@prisma/client';
 
-// In-memory stores
-const users = new Map<string, User>();
-const devices = new Map<string, Device>();
-const repositories = new Map<string, GatedRepository>();
-const sessions = new Map<string, RunSession>();
+export { prisma };
+export type { Profile, Device, GatedRepository, RunSession };
 
-// Index: GitHub user ID -> user ID
-const githubUserIndex = new Map<number, string>();
-// Index: device user ID -> device IDs
-const userDevicesIndex = new Map<string, Set<string>>();
-// Index: user ID -> repository IDs
-const userReposIndex = new Map<string, Set<string>>();
+// ============================================
+// Profile Operations
+// ============================================
 
-/**
- * User operations
- */
-export const userDb = {
-  create(data: Omit<User, 'id' | 'createdAt'>): User {
-    const user: User = {
-      ...data,
-      id: nanoid(),
-      createdAt: Date.now(),
-    };
-    users.set(user.id, user);
-    return user;
+export const profileDb = {
+  async findById(id: string): Promise<Profile | null> {
+    return prisma.profile.findUnique({ where: { id } });
   },
 
-  findById(id: string): User | undefined {
-    return users.get(id);
+  async findByGithubId(githubUserId: number): Promise<Profile | null> {
+    return prisma.profile.findUnique({ where: { githubUserId } });
   },
 
-  findByGithubId(githubUserId: number): User | undefined {
-    const userId = githubUserIndex.get(githubUserId);
-    if (!userId) return undefined;
-    return users.get(userId);
-  },
-
-  update(id: string, data: Partial<User>): User | undefined {
-    const user = users.get(id);
-    if (!user) return undefined;
-
-    const updated = { ...user, ...data };
-    users.set(id, updated);
-
-    // Update GitHub index if needed
-    if (data.githubUserId !== undefined) {
-      // Remove old index
-      if (user.githubUserId) {
-        githubUserIndex.delete(user.githubUserId);
-      }
-      // Add new index
-      if (data.githubUserId) {
-        githubUserIndex.set(data.githubUserId, id);
-      }
+  async update(id: string, data: Partial<Profile>): Promise<Profile | null> {
+    try {
+      return await prisma.profile.update({
+        where: { id },
+        data,
+      });
+    } catch {
+      return null;
     }
-
-    return updated;
   },
 
-  linkGithub(
+  async linkGithub(
     userId: string,
     githubUserId: number,
     githubUsername: string,
     accessToken: string
-  ): User | undefined {
-    const user = users.get(userId);
-    if (!user) return undefined;
+  ): Promise<Profile | null> {
+    try {
+      return await prisma.profile.update({
+        where: { id: userId },
+        data: {
+          githubUserId,
+          githubUsername,
+          githubAccessToken: accessToken,
+        },
+      });
+    } catch {
+      return null;
+    }
+  },
 
-    const updated: User = {
-      ...user,
-      githubUserId,
-      githubUsername,
-      githubAccessToken: accessToken, // TODO: encrypt in production
-    };
+  async unlinkGithub(userId: string): Promise<Profile | null> {
+    try {
+      return await prisma.profile.update({
+        where: { id: userId },
+        data: {
+          githubUserId: null,
+          githubUsername: null,
+          githubAccessToken: null,
+        },
+      });
+    } catch {
+      return null;
+    }
+  },
 
-    users.set(userId, updated);
-    githubUserIndex.set(githubUserId, userId);
-
-    return updated;
+  async updatePaceThreshold(userId: string, paceThresholdSeconds: number): Promise<Profile | null> {
+    try {
+      return await prisma.profile.update({
+        where: { id: userId },
+        data: { paceThresholdSeconds },
+      });
+    } catch {
+      return null;
+    }
   },
 };
 
-/**
- * Device operations
- */
+// ============================================
+// Device Operations
+// ============================================
+
 export const deviceDb = {
-  create(data: Omit<Device, 'id' | 'createdAt'>): Device {
-    const device: Device = {
-      ...data,
-      id: nanoid(),
-      createdAt: Date.now(),
-    };
-    devices.set(device.id, device);
-
-    // Update user index
-    const userDevices = userDevicesIndex.get(data.userId) || new Set();
-    userDevices.add(device.id);
-    userDevicesIndex.set(data.userId, userDevices);
-
-    return device;
-  },
-
-  findById(id: string): Device | undefined {
-    return devices.get(id);
-  },
-
-  findByUserId(userId: string): Device[] {
-    const deviceIds = userDevicesIndex.get(userId);
-    if (!deviceIds) return [];
-    return Array.from(deviceIds)
-      .map((id) => devices.get(id))
-      .filter((d): d is Device => d !== undefined);
-  },
-
-  update(id: string, data: Partial<Device>): Device | undefined {
-    const device = devices.get(id);
-    if (!device) return undefined;
-
-    const updated = { ...device, ...data };
-    devices.set(id, updated);
-    return updated;
-  },
-
-  updateHeartbeat(id: string, state: RunState): Device | undefined {
-    return this.update(id, {
-      lastHeartbeat: Date.now(),
-      lastRunState: state,
+  async create(data: {
+    userId: string;
+    name: string;
+    platform?: string;
+    pushToken?: string;
+  }): Promise<Device> {
+    return prisma.device.create({
+      data: {
+        userId: data.userId,
+        name: data.name,
+        platform: data.platform ?? 'ios',
+        pushToken: data.pushToken,
+      },
     });
   },
-};
 
-/**
- * Repository operations
- */
-export const repoDb = {
-  create(data: Omit<GatedRepository, 'id' | 'createdAt'>): GatedRepository {
-    const repo: GatedRepository = {
-      ...data,
-      id: nanoid(),
-      createdAt: Date.now(),
-    };
-    repositories.set(repo.id, repo);
-
-    // Update user index
-    const userRepos = userReposIndex.get(data.userId) || new Set();
-    userRepos.add(repo.id);
-    userReposIndex.set(data.userId, userRepos);
-
-    return repo;
+  async findById(id: string): Promise<Device | null> {
+    return prisma.device.findUnique({ where: { id } });
   },
 
-  findById(id: string): GatedRepository | undefined {
-    return repositories.get(id);
+  async findByUserId(userId: string): Promise<Device[]> {
+    return prisma.device.findMany({ where: { userId } });
   },
 
-  findByUserId(userId: string): GatedRepository[] {
-    const repoIds = userReposIndex.get(userId);
-    if (!repoIds) return [];
-    return Array.from(repoIds)
-      .map((id) => repositories.get(id))
-      .filter((r): r is GatedRepository => r !== undefined);
-  },
-
-  findByGithubRepoId(
-    userId: string,
-    githubRepoId: number
-  ): GatedRepository | undefined {
-    const repos = this.findByUserId(userId);
-    return repos.find((r) => r.githubRepoId === githubRepoId);
-  },
-
-  update(id: string, data: Partial<GatedRepository>): GatedRepository | undefined {
-    const repo = repositories.get(id);
-    if (!repo) return undefined;
-
-    const updated = { ...repo, ...data };
-    repositories.set(id, updated);
-    return updated;
-  },
-
-  delete(id: string): boolean {
-    const repo = repositories.get(id);
-    if (!repo) return false;
-
-    repositories.delete(id);
-    const userRepos = userReposIndex.get(repo.userId);
-    userRepos?.delete(id);
-
-    return true;
-  },
-};
-
-/**
- * Session operations
- */
-export const sessionDb = {
-  create(data: Omit<RunSession, 'id'>): RunSession {
-    const session: RunSession = {
-      ...data,
-      id: nanoid(),
-    };
-    sessions.set(session.id, session);
-    return session;
-  },
-
-  findById(id: string): RunSession | undefined {
-    return sessions.get(id);
-  },
-
-  findActiveByDeviceId(deviceId: string): RunSession | undefined {
-    for (const session of sessions.values()) {
-      if (session.deviceId === deviceId && !session.endedAt) {
-        return session;
-      }
+  async update(id: string, data: Partial<Device>): Promise<Device | null> {
+    try {
+      return await prisma.device.update({
+        where: { id },
+        data,
+      });
+    } catch {
+      return null;
     }
-    return undefined;
   },
 
-  update(id: string, data: Partial<RunSession>): RunSession | undefined {
-    const session = sessions.get(id);
-    if (!session) return undefined;
+  async updateHeartbeat(id: string, state: string): Promise<Device | null> {
+    try {
+      return await prisma.device.update({
+        where: { id },
+        data: {
+          lastHeartbeat: new Date(),
+          lastRunState: state,
+        },
+      });
+    } catch {
+      return null;
+    }
+  },
 
-    const updated = { ...session, ...data };
-    sessions.set(id, updated);
-    return updated;
+  async delete(id: string): Promise<boolean> {
+    try {
+      await prisma.device.delete({ where: { id } });
+      return true;
+    } catch {
+      return false;
+    }
   },
 };
+
+// ============================================
+// Repository Operations
+// ============================================
+
+export const repoDb = {
+  async create(data: {
+    userId: string;
+    githubRepoId: number;
+    owner: string;
+    name: string;
+    fullName: string;
+    rulesetId?: number;
+    gatingEnabled?: boolean;
+  }): Promise<GatedRepository> {
+    return prisma.gatedRepository.create({
+      data: {
+        userId: data.userId,
+        githubRepoId: data.githubRepoId,
+        owner: data.owner,
+        name: data.name,
+        fullName: data.fullName,
+        rulesetId: data.rulesetId,
+        gatingEnabled: data.gatingEnabled ?? true,
+      },
+    });
+  },
+
+  async findById(id: string): Promise<GatedRepository | null> {
+    return prisma.gatedRepository.findUnique({ where: { id } });
+  },
+
+  async findByUserId(userId: string): Promise<GatedRepository[]> {
+    return prisma.gatedRepository.findMany({ where: { userId } });
+  },
+
+  async findByGithubRepoId(userId: string, githubRepoId: number): Promise<GatedRepository | null> {
+    return prisma.gatedRepository.findUnique({
+      where: {
+        userId_githubRepoId: { userId, githubRepoId },
+      },
+    });
+  },
+
+  async update(id: string, data: Partial<GatedRepository>): Promise<GatedRepository | null> {
+    try {
+      return await prisma.gatedRepository.update({
+        where: { id },
+        data,
+      });
+    } catch {
+      return null;
+    }
+  },
+
+  async delete(id: string): Promise<boolean> {
+    try {
+      await prisma.gatedRepository.delete({ where: { id } });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+
+// ============================================
+// Run Session Operations
+// ============================================
+
+export const sessionDb = {
+  async create(data: {
+    userId: string;
+    deviceId?: string;
+    startedAt: Date;
+    paceThresholdSeconds?: number;
+    currentState?: string;
+  }): Promise<RunSession> {
+    return prisma.runSession.create({
+      data: {
+        userId: data.userId,
+        deviceId: data.deviceId,
+        startedAt: data.startedAt,
+        paceThresholdSeconds: data.paceThresholdSeconds,
+        currentState: data.currentState ?? 'RUNNING_LOCKED',
+        lastHeartbeat: new Date(),
+      },
+    });
+  },
+
+  async findById(id: string): Promise<RunSession | null> {
+    return prisma.runSession.findUnique({ where: { id } });
+  },
+
+  async findActiveByDeviceId(deviceId: string): Promise<RunSession | null> {
+    return prisma.runSession.findFirst({
+      where: {
+        deviceId,
+        endedAt: null,
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+  },
+
+  async findActiveByUserId(userId: string): Promise<RunSession | null> {
+    return prisma.runSession.findFirst({
+      where: {
+        userId,
+        endedAt: null,
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+  },
+
+  async update(id: string, data: Partial<RunSession>): Promise<RunSession | null> {
+    try {
+      return await prisma.runSession.update({
+        where: { id },
+        data,
+      });
+    } catch {
+      return null;
+    }
+  },
+
+  async endSession(
+    id: string,
+    data: {
+      endedAt: Date;
+      durationSeconds?: number;
+      distanceMeters?: number;
+      averagePaceSeconds?: number;
+      caloriesBurned?: number;
+      route?: unknown;
+    }
+  ): Promise<RunSession | null> {
+    try {
+      return await prisma.runSession.update({
+        where: { id },
+        data: {
+          endedAt: data.endedAt,
+          durationSeconds: data.durationSeconds,
+          distanceMeters: data.distanceMeters,
+          averagePaceSeconds: data.averagePaceSeconds,
+          caloriesBurned: data.caloriesBurned,
+          route: data.route as never,
+          currentState: 'NOT_RUNNING',
+        },
+      });
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Get run history for a user
+   */
+  async getHistory(
+    userId: string,
+    options: { limit?: number; offset?: number } = {}
+  ): Promise<RunSession[]> {
+    return prisma.runSession.findMany({
+      where: {
+        userId,
+        endedAt: { not: null },
+      },
+      orderBy: { startedAt: 'desc' },
+      take: options.limit ?? 50,
+      skip: options.offset ?? 0,
+    });
+  },
+
+  /**
+   * Get stats for a user
+   */
+  async getStats(userId: string): Promise<{
+    totalRuns: number;
+    totalDistanceMeters: number;
+    totalDurationSeconds: number;
+    averagePaceSeconds: number | null;
+  }> {
+    const result = await prisma.runSession.aggregate({
+      where: {
+        userId,
+        endedAt: { not: null },
+      },
+      _count: true,
+      _sum: {
+        distanceMeters: true,
+        durationSeconds: true,
+      },
+      _avg: {
+        averagePaceSeconds: true,
+      },
+    });
+
+    return {
+      totalRuns: result._count,
+      totalDistanceMeters: result._sum.distanceMeters ?? 0,
+      totalDurationSeconds: result._sum.durationSeconds ?? 0,
+      averagePaceSeconds: result._avg.averagePaceSeconds,
+    };
+  },
+};
+
+// ============================================
+// Heartbeat Check Query
+// ============================================
+
+export type RunSessionWithProfile = RunSession & { profile: Profile };
 
 /**
  * Get all active sessions that need heartbeat checking
  */
-export function getActiveSessionsForHeartbeatCheck(): RunSession[] {
-  return Array.from(sessions.values()).filter((s) => !s.endedAt);
+export async function getActiveSessionsForHeartbeatCheck(): Promise<RunSessionWithProfile[]> {
+  return prisma.runSession.findMany({
+    where: {
+      endedAt: null,
+    },
+    include: {
+      profile: true,
+    },
+  });
 }

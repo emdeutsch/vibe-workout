@@ -19,6 +19,9 @@ class AppState: ObservableObject {
     @Published var totalDistance: Double = 0 // meters
     @Published var runDuration: TimeInterval = 0
 
+    /// User's pace threshold setting (seconds per mile)
+    @Published var paceThresholdSeconds: Int = 600 // Default 10:00/mi
+
     /// Route coordinates for map display
     @Published var routeCoordinates: [CLLocationCoordinate2D] = []
     /// Current user location for map centering
@@ -32,6 +35,8 @@ class AppState: ObservableObject {
     let screenTimeService = ScreenTimeService()
     let apiService = APIService()
     let paceCalculator = PaceCalculator()
+    let healthKitService = HealthKitService()
+    let authService = AuthService.shared
 
     // MARK: - Private
 
@@ -39,6 +44,8 @@ class AppState: ObservableObject {
     private var runTimer: Timer?
     private var heartbeatTimer: Timer?
     private var runStartTime: Date?
+    private var routeLocations: [CLLocation] = [] // For HealthKit route
+    private var caloriesEstimate: Double = 0
 
     // MARK: - Initialization
 
@@ -49,12 +56,43 @@ class AppState: ObservableObject {
         // Set up location updates
         setupLocationUpdates()
 
-        // Check authentication
-        if let token = UserDefaults.standard.string(forKey: "authToken") {
-            apiService.setAuthToken(token)
-            isAuthenticated = true
-            await refreshUserState()
+        // Set up auth state observation
+        setupAuthObserver()
+
+        // Check for existing Supabase session
+        do {
+            try await authService.checkSession()
+            if authService.isAuthenticated {
+                isAuthenticated = true
+                await refreshUserState()
+            }
+        } catch {
+            // No existing session, user needs to sign in
+            print("No existing session: \(error)")
         }
+
+        // Request HealthKit authorization
+        if healthKitService.isAvailable {
+            do {
+                try await healthKitService.requestAuthorization()
+            } catch {
+                print("HealthKit authorization failed: \(error)")
+            }
+        }
+    }
+
+    private func setupAuthObserver() {
+        authService.$isAuthenticated
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isAuth in
+                self?.isAuthenticated = isAuth
+                if isAuth {
+                    Task {
+                        await self?.refreshUserState()
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Onboarding
@@ -66,22 +104,42 @@ class AppState: ObservableObject {
 
     // MARK: - Authentication
 
-    func register(email: String, deviceName: String) async throws {
-        let response = try await apiService.register(email: email, deviceName: deviceName)
-        UserDefaults.standard.set(response.token, forKey: "authToken")
-        apiService.setAuthToken(response.token)
-        isAuthenticated = true
+    func signIn(email: String, password: String) async throws {
+        try await authService.signIn(email: email, password: password)
+    }
+
+    func signUp(email: String, password: String) async throws {
+        try await authService.signUp(email: email, password: password)
+    }
+
+    func signInWithMagicLink(email: String) async throws {
+        try await authService.signInWithMagicLink(email: email)
+    }
+
+    func signOut() async throws {
+        try await authService.signOut()
+        isAuthenticated = false
+        githubConnected = false
+        hasGatedRepos = false
     }
 
     func refreshUserState() async {
         do {
-            let user = try await apiService.getCurrentUser()
-            githubConnected = user.githubConnected
+            let profile = try await apiService.getProfile()
+            githubConnected = profile.githubConnected
+            paceThresholdSeconds = profile.paceThresholdSeconds
             let repos = try await apiService.getGatedRepos()
             hasGatedRepos = !repos.isEmpty
         } catch {
             print("Failed to refresh user state: \(error)")
         }
+    }
+
+    // MARK: - Pace Threshold
+
+    func updatePaceThreshold(seconds: Int) async throws {
+        try await apiService.updatePaceThreshold(seconds: seconds)
+        paceThresholdSeconds = seconds
     }
 
     // MARK: - Run Session
@@ -101,6 +159,8 @@ class AppState: ObservableObject {
         runDuration = 0
         currentPace = nil
         routeCoordinates = []
+        routeLocations = []
+        caloriesEstimate = 0
         runStartTime = Date()
 
         // Initial state is locked (must prove pace)
@@ -108,6 +168,15 @@ class AppState: ObservableObject {
 
         // Block Claude immediately
         await screenTimeService.blockClaude()
+
+        // Start HealthKit workout
+        if healthKitService.isAvailable {
+            do {
+                try await healthKitService.startWorkout()
+            } catch {
+                print("Failed to start HealthKit workout: \(error)")
+            }
+        }
 
         // Notify backend
         do {
@@ -124,6 +193,8 @@ class AppState: ObservableObject {
     func endRun() async {
         guard runState != .notRunning else { return }
 
+        let endTime = Date()
+
         // Stop tracking
         locationService.stopTracking()
         stopRunTimer()
@@ -132,11 +203,49 @@ class AppState: ObservableObject {
         // Unblock Claude
         await screenTimeService.unblockClaude()
 
+        // Save to HealthKit
+        var healthKitWorkoutId: String? = nil
+        if healthKitService.isAvailable, let startTime = runStartTime {
+            do {
+                // Add final route data
+                if !routeLocations.isEmpty {
+                    try await healthKitService.addRouteData(locations: routeLocations)
+                }
+
+                // End and save workout
+                let workout = try await healthKitService.endWorkout(
+                    distanceMeters: totalDistance,
+                    caloriesBurned: caloriesEstimate,
+                    startDate: startTime,
+                    endDate: endTime
+                )
+                healthKitWorkoutId = workout?.uuid.uuidString
+            } catch {
+                print("Failed to save HealthKit workout: \(error)")
+            }
+        }
+
         runState = .notRunning
 
-        // Notify backend
+        // Build route data for backend
+        let route: [[String: Any]] = routeCoordinates.enumerated().map { index, coord in
+            [
+                "lat": coord.latitude,
+                "lng": coord.longitude,
+                "timestamp": Int((runStartTime?.timeIntervalSince1970 ?? 0) * 1000) + (index * 5000),
+                "pace": currentPace ?? 0
+            ]
+        }
+
+        // Notify backend with final stats
         do {
-            try await apiService.endRun()
+            try await apiService.endRun(
+                distanceMeters: totalDistance,
+                averagePaceSeconds: currentPace,
+                caloriesBurned: caloriesEstimate,
+                route: route,
+                healthKitWorkoutId: healthKitWorkoutId
+            )
         } catch {
             print("Failed to notify backend of run end: \(error)")
         }
@@ -170,10 +279,24 @@ class AppState: ObservableObject {
         // Add to route for map display
         routeCoordinates.append(coordinate)
 
+        // Add to HealthKit route
+        let clLocation = CLLocation(
+            coordinate: coordinate,
+            altitude: 0,
+            horizontalAccuracy: location.accuracy,
+            verticalAccuracy: 0,
+            timestamp: Date(timeIntervalSince1970: location.timestamp / 1000)
+        )
+        routeLocations.append(clLocation)
+
         // Calculate pace
         if let pace = paceCalculator.addSample(location) {
             currentPace = pace
             totalDistance = paceCalculator.totalDistance
+
+            // Estimate calories (rough: 100 cal per mile for 150lb person)
+            let miles = totalDistance / 1609.344
+            caloriesEstimate = miles * 100
 
             // Update run state based on pace
             await updateRunState(pace: pace)
@@ -181,7 +304,7 @@ class AppState: ObservableObject {
     }
 
     private func updateRunState(pace: Double) async {
-        let threshold: Double = 600 // 10:00/mi in seconds
+        let threshold = Double(paceThresholdSeconds)
         let hysteresis: Double = 15 // 15 second buffer
 
         let previousState = runState
@@ -234,12 +357,30 @@ class AppState: ObservableObject {
     private func sendHeartbeat() async {
         guard runState != .notRunning else { return }
 
+        // Build route data
+        let route: [[String: Any]] = routeCoordinates.enumerated().map { index, coord in
+            [
+                "lat": coord.latitude,
+                "lng": coord.longitude,
+                "timestamp": Int((runStartTime?.timeIntervalSince1970 ?? 0) * 1000) + (index * 5000),
+                "pace": currentPace ?? 0
+            ]
+        }
+
         do {
-            _ = try await apiService.sendHeartbeat(
+            let response = try await apiService.sendHeartbeat(
                 runState: runState,
                 pace: currentPace,
+                distanceMeters: totalDistance,
+                caloriesBurned: caloriesEstimate,
+                route: route,
                 location: locationService.lastLocation
             )
+
+            // Update pace threshold if server returns a different value
+            if response.paceThresholdSeconds != paceThresholdSeconds {
+                paceThresholdSeconds = response.paceThresholdSeconds
+            }
         } catch {
             print("Heartbeat failed: \(error)")
         }
@@ -259,6 +400,7 @@ enum AppError: Error, Identifiable {
     case auth(String)
     case screenTime(String)
     case location(String)
+    case healthKit(String)
 
     var id: String {
         switch self {
@@ -266,6 +408,7 @@ enum AppError: Error, Identifiable {
         case .auth(let msg): return "auth-\(msg)"
         case .screenTime(let msg): return "screenTime-\(msg)"
         case .location(let msg): return "location-\(msg)"
+        case .healthKit(let msg): return "healthKit-\(msg)"
         }
     }
 
@@ -275,6 +418,7 @@ enum AppError: Error, Identifiable {
         case .auth(let msg): return msg
         case .screenTime(let msg): return msg
         case .location(let msg): return msg
+        case .healthKit(let msg): return msg
         }
     }
 }

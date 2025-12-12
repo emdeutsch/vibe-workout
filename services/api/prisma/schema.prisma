@@ -1,0 +1,125 @@
+// VibeRunner Database Schema
+// Uses Prisma with Supabase PostgreSQL
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["public", "auth"]
+}
+
+// ============================================
+// Supabase Auth Schema (read-only reference)
+// ============================================
+
+model AuthUser {
+  id        String   @id @db.Uuid
+  email     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  // Relation to our profile
+  profile Profile?
+
+  @@map("users")
+  @@schema("auth")
+}
+
+// ============================================
+// Public Schema (managed by Prisma)
+// ============================================
+
+/// User profile extending Supabase auth
+model Profile {
+  id                   String   @id @db.Uuid
+  email                String?
+  githubUserId         Int?     @unique @map("github_user_id")
+  githubUsername       String?  @map("github_username")
+  githubAccessToken    String?  @map("github_access_token")
+  paceThresholdSeconds Int      @default(600) @map("pace_threshold_seconds") // 10:00/mi
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relation to Supabase auth user
+  authUser AuthUser @relation(fields: [id], references: [id], onDelete: Cascade)
+
+  // Relations
+  devices           Device[]
+  gatedRepositories GatedRepository[]
+  runSessions       RunSession[]
+
+  @@map("profiles")
+  @@schema("public")
+}
+
+/// Devices registered to users
+model Device {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  name          String
+  platform      String    @default("ios")
+  pushToken     String?   @map("push_token")
+  lastHeartbeat DateTime? @map("last_heartbeat") @db.Timestamptz(6)
+  lastRunState  String?   @map("last_run_state")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  profile     Profile      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runSessions RunSession[]
+
+  @@map("devices")
+  @@schema("public")
+}
+
+/// Repositories configured for GitHub write gating
+model GatedRepository {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  githubRepoId  Int      @map("github_repo_id")
+  owner         String
+  name          String
+  fullName      String   @map("full_name")
+  rulesetId     Int?     @map("ruleset_id")
+  gatingEnabled Boolean  @default(true) @map("gating_enabled")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  profile Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, githubRepoId])
+  @@map("gated_repositories")
+  @@schema("public")
+}
+
+/// Run sessions with history
+model RunSession {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String    @map("user_id") @db.Uuid
+  deviceId             String?   @map("device_id") @db.Uuid
+  startedAt            DateTime  @map("started_at") @db.Timestamptz(6)
+  endedAt              DateTime? @map("ended_at") @db.Timestamptz(6)
+  durationSeconds      Int?      @map("duration_seconds")
+  distanceMeters       Float?    @map("distance_meters")
+  averagePaceSeconds   Float?    @map("average_pace_seconds")
+  paceThresholdSeconds Int?      @map("pace_threshold_seconds") // Snapshot at run time
+  caloriesBurned       Float?    @map("calories_burned")
+  currentState         String    @default("RUNNING_LOCKED") @map("current_state")
+  lastHeartbeat        DateTime? @map("last_heartbeat") @db.Timestamptz(6)
+  route                Json?     // Array of {lat, lng, timestamp, pace?}
+  healthKitWorkoutId   String?   @map("healthkit_workout_id") // HKWorkout UUID
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  profile Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device  Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([startedAt(sort: Desc)])
+  @@map("run_sessions")
+  @@schema("public")
+}

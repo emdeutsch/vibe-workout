@@ -3,30 +3,44 @@ import Foundation
 /// Service for communicating with the VibeRunner backend
 class APIService {
     private let baseURL: String
-    private var authToken: String?
+    private var deviceId: String
 
-    init(baseURL: String = "http://localhost:3000") {
+    init(baseURL: String = Configuration.apiBaseURL) {
         self.baseURL = baseURL
+        // Get or create device ID
+        if let savedDeviceId = UserDefaults.standard.string(forKey: "deviceId") {
+            self.deviceId = savedDeviceId
+        } else {
+            let newDeviceId = UUID().uuidString
+            UserDefaults.standard.set(newDeviceId, forKey: "deviceId")
+            self.deviceId = newDeviceId
+        }
     }
 
-    func setAuthToken(_ token: String) {
-        self.authToken = token
+    /// Get auth token from Supabase
+    private var authToken: String? {
+        AuthService.shared.accessToken
     }
 
-    // MARK: - Auth
+    // MARK: - Profile
 
-    func register(email: String, deviceName: String) async throws -> RegisterResponse {
-        let request = RegisterRequest(email: email, deviceName: deviceName)
-        return try await post("/auth/register", body: request)
+    func getProfile() async throws -> ProfileResponse {
+        return try await get("/auth/profile")
     }
 
-    func getCurrentUser() async throws -> UserInfo {
-        return try await get("/auth/me")
+    func updatePaceThreshold(seconds: Int) async throws {
+        let request = UpdatePaceThresholdRequest(paceThresholdSeconds: seconds)
+        let _: ProfileUpdateResponse = try await put("/auth/profile", body: request)
     }
 
     func getGitHubAuthURL() async throws -> String {
         let response: GitHubAuthResponse = try await get("/auth/github")
         return response.url
+    }
+
+    func registerDevice(name: String) async throws -> DeviceResponse {
+        let request = RegisterDeviceRequest(name: name)
+        return try await post("/auth/devices", body: request)
     }
 
     // MARK: - Repositories
@@ -58,10 +72,25 @@ class APIService {
 
     // MARK: - Heartbeat
 
-    func sendHeartbeat(runState: RunState, pace: Double?, location: LocationSample?) async throws -> HeartbeatResponse {
+    func sendHeartbeat(
+        runState: RunState,
+        pace: Double?,
+        distanceMeters: Double?,
+        caloriesBurned: Double?,
+        route: [[String: Any]]?,
+        location: LocationSample?
+    ) async throws -> HeartbeatResponse {
         let request = HeartbeatRequest(
             runState: runState.rawValue,
             currentPace: pace,
+            distanceMeters: distanceMeters,
+            caloriesBurned: caloriesBurned,
+            route: route?.map { RoutePoint(
+                lat: $0["lat"] as? Double ?? 0,
+                lng: $0["lng"] as? Double ?? 0,
+                timestamp: $0["timestamp"] as? Int ?? 0,
+                pace: $0["pace"] as? Double
+            )},
             location: location.map { LocationData(latitude: $0.latitude, longitude: $0.longitude) }
         )
         return try await post("/heartbeat", body: request)
@@ -72,13 +101,45 @@ class APIService {
         return response.session
     }
 
-    func endRun() async throws -> SessionInfo {
-        let response: SessionResponse = try await post("/heartbeat/end", body: EmptyBody())
+    func endRun(
+        distanceMeters: Double?,
+        averagePaceSeconds: Double?,
+        caloriesBurned: Double?,
+        route: [[String: Any]]?,
+        healthKitWorkoutId: String?
+    ) async throws -> SessionInfo {
+        let request = EndRunRequest(
+            distanceMeters: distanceMeters,
+            averagePaceSeconds: averagePaceSeconds,
+            caloriesBurned: caloriesBurned,
+            route: route?.map { RoutePoint(
+                lat: $0["lat"] as? Double ?? 0,
+                lng: $0["lng"] as? Double ?? 0,
+                timestamp: $0["timestamp"] as? Int ?? 0,
+                pace: $0["pace"] as? Double
+            )},
+            healthKitWorkoutId: healthKitWorkoutId
+        )
+        let response: SessionResponse = try await post("/heartbeat/end", body: request)
         return response.session
     }
 
     func getSessionStatus() async throws -> SessionStatusResponse {
         return try await get("/heartbeat/status")
+    }
+
+    // MARK: - Run History
+
+    func getRunHistory(limit: Int = 50, offset: Int = 0) async throws -> RunHistoryResponse {
+        return try await get("/runs/history?limit=\(limit)&offset=\(offset)")
+    }
+
+    func getRunStats() async throws -> RunStatsResponse {
+        return try await get("/runs/stats")
+    }
+
+    func getRun(id: String) async throws -> RunDetailResponse {
+        return try await get("/runs/\(id)")
     }
 
     // MARK: - HTTP Methods
@@ -87,7 +148,7 @@ class APIService {
         let url = URL(string: baseURL + path)!
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        addAuthHeader(&request)
+        addHeaders(&request)
         return try await execute(request)
     }
 
@@ -97,7 +158,17 @@ class APIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
-        addAuthHeader(&request)
+        addHeaders(&request)
+        return try await execute(request)
+    }
+
+    private func put<T: Decodable, B: Encodable>(_ path: String, body: B) async throws -> T {
+        let url = URL(string: baseURL + path)!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        addHeaders(&request)
         return try await execute(request)
     }
 
@@ -105,14 +176,17 @@ class APIService {
         let url = URL(string: baseURL + path)!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        addAuthHeader(&request)
+        addHeaders(&request)
         let _: EmptyResponse = try await execute(request)
     }
 
-    private func addAuthHeader(_ request: inout URLRequest) {
+    private func addHeaders(_ request: inout URLRequest) {
+        // Add auth token from Supabase
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        // Add device ID
+        request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
     }
 
     private func execute<T: Decodable>(_ request: URLRequest) async throws -> T {

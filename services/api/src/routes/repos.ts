@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
-import { userDb, repoDb } from '../db.js';
+import { profileDb, repoDb } from '../db.js';
 import { createRulesetManager } from '@viberunner/github';
 
 const router = Router();
@@ -15,17 +15,17 @@ const router = Router();
  */
 router.get('/available', requireAuth, async (req, res) => {
   try {
-    const user = userDb.findById(req.user!.id);
-    if (!user?.githubAccessToken) {
+    const profile = await profileDb.findById(req.user!.id);
+    if (!profile?.githubAccessToken) {
       res.status(400).json({ error: 'GitHub not connected' });
       return;
     }
 
-    const manager = createRulesetManager(user.githubAccessToken);
+    const manager = createRulesetManager(profile.githubAccessToken);
     const repos = await manager.listRepositories();
 
     // Mark which ones are already gated
-    const gatedRepos = repoDb.findByUserId(user.id);
+    const gatedRepos = await repoDb.findByUserId(profile.id);
     const gatedRepoIds = new Set(gatedRepos.map((r) => r.githubRepoId));
 
     const result = repos.map((repo) => ({
@@ -43,9 +43,14 @@ router.get('/available', requireAuth, async (req, res) => {
 /**
  * List user's gated repositories
  */
-router.get('/', requireAuth, (req, res) => {
-  const repos = repoDb.findByUserId(req.user!.id);
-  res.json({ repositories: repos });
+router.get('/', requireAuth, async (req, res) => {
+  try {
+    const repos = await repoDb.findByUserId(req.user!.id);
+    res.json({ repositories: repos });
+  } catch (error) {
+    console.error('Error listing gated repos:', error);
+    res.status(500).json({ error: 'Failed to list repositories' });
+  }
 });
 
 /**
@@ -61,22 +66,22 @@ const addRepoSchema = z.object({
 router.post('/', requireAuth, async (req, res) => {
   try {
     const body = addRepoSchema.parse(req.body);
-    const user = userDb.findById(req.user!.id);
+    const profile = await profileDb.findById(req.user!.id);
 
-    if (!user?.githubAccessToken) {
+    if (!profile?.githubAccessToken) {
       res.status(400).json({ error: 'GitHub not connected' });
       return;
     }
 
     // Check if already gated
-    const existing = repoDb.findByGithubRepoId(user.id, body.githubRepoId);
+    const existing = await repoDb.findByGithubRepoId(profile.id, body.githubRepoId);
     if (existing) {
       res.status(409).json({ error: 'Repository already gated' });
       return;
     }
 
     // Create the ruleset on GitHub
-    const manager = createRulesetManager(user.githubAccessToken);
+    const manager = createRulesetManager(profile.githubAccessToken);
     const result = await manager.createRuleset({
       owner: body.owner,
       repo: body.name,
@@ -88,14 +93,14 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     // Save to database
-    const repo = repoDb.create({
-      userId: user.id,
+    const repo = await repoDb.create({
+      userId: profile.id,
       githubRepoId: body.githubRepoId,
       owner: body.owner,
       name: body.name,
       fullName: body.fullName,
       rulesetId: result.rulesetId,
-      gatingEnabled: true, // Start with gating enabled (writes blocked)
+      gatingEnabled: true,
     });
 
     // Enable the ruleset (block writes by default)
@@ -119,7 +124,7 @@ router.post('/', requireAuth, async (req, res) => {
  */
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
-    const repo = repoDb.findById(req.params.id);
+    const repo = await repoDb.findById(req.params.id);
     if (!repo) {
       res.status(404).json({ error: 'Repository not found' });
       return;
@@ -130,14 +135,13 @@ router.delete('/:id', requireAuth, async (req, res) => {
       return;
     }
 
-    const user = userDb.findById(req.user!.id);
-    if (user?.githubAccessToken && repo.rulesetId) {
-      // Remove the ruleset from GitHub
-      const manager = createRulesetManager(user.githubAccessToken);
+    const profile = await profileDb.findById(req.user!.id);
+    if (profile?.githubAccessToken && repo.rulesetId) {
+      const manager = createRulesetManager(profile.githubAccessToken);
       await manager.deleteRuleset(repo.owner, repo.name, repo.rulesetId);
     }
 
-    repoDb.delete(repo.id);
+    await repoDb.delete(repo.id);
     res.json({ success: true });
   } catch (error) {
     console.error('Error removing repo:', error);
@@ -150,7 +154,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
  */
 router.get('/:id/status', requireAuth, async (req, res) => {
   try {
-    const repo = repoDb.findById(req.params.id);
+    const repo = await repoDb.findById(req.params.id);
     if (!repo) {
       res.status(404).json({ error: 'Repository not found' });
       return;
@@ -161,8 +165,8 @@ router.get('/:id/status', requireAuth, async (req, res) => {
       return;
     }
 
-    const user = userDb.findById(req.user!.id);
-    if (!user?.githubAccessToken || !repo.rulesetId) {
+    const profile = await profileDb.findById(req.user!.id);
+    if (!profile?.githubAccessToken || !repo.rulesetId) {
       res.json({
         gatingEnabled: repo.gatingEnabled,
         writesBlocked: true,
@@ -171,7 +175,7 @@ router.get('/:id/status', requireAuth, async (req, res) => {
       return;
     }
 
-    const manager = createRulesetManager(user.githubAccessToken);
+    const manager = createRulesetManager(profile.githubAccessToken);
     const status = await manager.getRulesetStatus(
       repo.owner,
       repo.name,

@@ -1,23 +1,36 @@
 import Foundation
 
-// MARK: - Auth
+// MARK: - Profile
 
-struct RegisterRequest: Codable {
-    let email: String
-    let deviceName: String
+struct ProfileResponse: Codable {
+    let profile: ProfileInfo
+    var githubConnected: Bool { profile.githubUsername != nil }
+    var paceThresholdSeconds: Int { profile.paceThresholdSeconds }
 }
 
-struct RegisterResponse: Codable {
-    let user: UserInfo
-    let device: DeviceInfo
-    let token: String
-}
-
-struct UserInfo: Codable {
+struct ProfileInfo: Codable {
     let id: String
-    let email: String
+    let email: String?
     let githubUsername: String?
-    let githubConnected: Bool
+    let paceThresholdSeconds: Int
+}
+
+struct UpdatePaceThresholdRequest: Codable {
+    let paceThresholdSeconds: Int
+}
+
+struct ProfileUpdateResponse: Codable {
+    let profile: ProfileInfo
+}
+
+// MARK: - Device
+
+struct RegisterDeviceRequest: Codable {
+    let name: String
+}
+
+struct DeviceResponse: Codable {
+    let device: DeviceInfo
 }
 
 struct DeviceInfo: Codable {
@@ -73,7 +86,17 @@ struct AddRepositoryRequest: Codable {
 struct HeartbeatRequest: Codable {
     let runState: String
     let currentPace: Double?
+    let distanceMeters: Double?
+    let caloriesBurned: Double?
+    let route: [RoutePoint]?
     let location: LocationData?
+}
+
+struct RoutePoint: Codable {
+    let lat: Double
+    let lng: Double
+    let timestamp: Int
+    let pace: Double?
 }
 
 struct LocationData: Codable {
@@ -86,6 +109,7 @@ struct HeartbeatResponse: Codable {
     let serverTime: Int
     let stateAcknowledged: String
     let githubWritesEnabled: Bool
+    let paceThresholdSeconds: Int
 }
 
 // MARK: - Session
@@ -96,28 +120,72 @@ struct SessionResponse: Codable {
 
 struct SessionInfo: Codable {
     let id: String
-    let startedAt: Int
+    let startedAt: String
     let currentState: String?
-    let averagePace: Double?
-    let endedAt: Int?
-    let duration: Int?
+    let paceThresholdSeconds: Int?
+    let endedAt: String?
+    let durationSeconds: Int?
+    let distanceMeters: Double?
+    let averagePaceSeconds: Double?
+}
+
+struct EndRunRequest: Codable {
+    let distanceMeters: Double?
+    let averagePaceSeconds: Double?
+    let caloriesBurned: Double?
+    let route: [RoutePoint]?
+    let healthKitWorkoutId: String?
 }
 
 struct SessionStatusResponse: Codable {
     let device: DeviceStatus?
     let session: SessionStatusInfo?
     let githubWritesEnabled: Bool
+    let paceThresholdSeconds: Int
 }
 
 struct DeviceStatus: Codable {
     let id: String
-    let lastHeartbeat: Int?
+    let lastHeartbeat: String?
     let lastRunState: String?
 }
 
 struct SessionStatusInfo: Codable {
     let id: String
-    let startedAt: Int
+    let startedAt: String
     let currentState: String
     let averagePace: Double?
+    let distanceMeters: Double?
+}
+
+// MARK: - Run History
+
+struct RunHistoryResponse: Codable {
+    let runs: [RunRecord]
+}
+
+struct RunRecord: Codable, Identifiable {
+    let id: String
+    let startedAt: String
+    let endedAt: String?
+    let durationSeconds: Int?
+    let distanceMeters: Double?
+    let averagePaceSeconds: Double?
+    let caloriesBurned: Double?
+    let paceThresholdSeconds: Int?
+    let route: [RoutePoint]?
+    let healthKitWorkoutId: String?
+}
+
+struct RunStatsResponse: Codable {
+    let totalRuns: Int
+    let totalDistanceMeters: Double
+    let totalDurationSeconds: Int
+    let averagePaceSeconds: Double?
+    let totalDistanceMiles: Double
+    let totalDurationMinutes: Int
+}
+
+struct RunDetailResponse: Codable {
+    let run: RunRecord
 }

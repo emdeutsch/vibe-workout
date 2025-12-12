@@ -6,7 +6,7 @@
  */
 
 import { getConfig } from '../config.js';
-import { userDb, deviceDb, repoDb, sessionDb, getActiveSessionsForHeartbeatCheck } from '../db.js';
+import { profileDb, deviceDb, repoDb, sessionDb, getActiveSessionsForHeartbeatCheck } from '../db.js';
 import { createRulesetManager } from '@viberunner/github';
 
 let checkInterval: ReturnType<typeof setInterval> | null = null;
@@ -23,7 +23,7 @@ export function startHeartbeatChecker(): void {
   );
 
   checkInterval = setInterval(
-    checkStaleHeartbeats,
+    () => void checkStaleHeartbeats(),
     config.heartbeat.checkIntervalMs
   );
 }
@@ -42,45 +42,50 @@ export function stopHeartbeatChecker(): void {
  * Check for stale heartbeats and enforce fail-closed
  */
 async function checkStaleHeartbeats(): Promise<void> {
-  const config = getConfig();
-  const now = Date.now();
-  const sessions = getActiveSessionsForHeartbeatCheck();
+  try {
+    const config = getConfig();
+    const now = Date.now();
+    const sessions = await getActiveSessionsForHeartbeatCheck();
 
-  for (const session of sessions) {
-    const isStale = now - session.lastHeartbeat > config.heartbeat.timeoutMs;
+    for (const session of sessions) {
+      const lastHeartbeat = session.lastHeartbeat?.getTime() ?? 0;
+      const isStale = now - lastHeartbeat > config.heartbeat.timeoutMs;
 
-    // Only take action if session was unlocked and is now stale
-    if (isStale && session.currentState === 'RUNNING_UNLOCKED') {
-      console.log(
-        `Session ${session.id} heartbeat stale, enforcing fail-closed`
-      );
+      // Only take action if session was unlocked and is now stale
+      if (isStale && session.currentState === 'RUNNING_UNLOCKED') {
+        console.log(
+          `Session ${session.id} heartbeat stale, enforcing fail-closed`
+        );
 
-      // Update session state
-      sessionDb.update(session.id, {
-        currentState: 'RUNNING_LOCKED',
-        lastHeartbeat: session.lastHeartbeat, // Keep original
-      });
+        // Update session state
+        await sessionDb.update(session.id, {
+          currentState: 'RUNNING_LOCKED',
+        });
 
-      // Update device state
-      deviceDb.updateHeartbeat(session.deviceId, 'RUNNING_LOCKED');
+        // Update device state if we have a device
+        if (session.deviceId) {
+          await deviceDb.updateHeartbeat(session.deviceId, 'RUNNING_LOCKED');
+        }
 
-      // Block GitHub writes
-      await blockUserWrites(session.userId);
+        // Block GitHub writes using the included profile data
+        if (session.profile?.githubAccessToken) {
+          await blockUserWrites(session.userId, session.profile.githubAccessToken);
+        }
+      }
     }
+  } catch (error) {
+    console.error('Error checking stale heartbeats:', error);
   }
 }
 
 /**
  * Block writes for all of a user's gated repositories
  */
-async function blockUserWrites(userId: string): Promise<void> {
-  const user = userDb.findById(userId);
-  if (!user?.githubAccessToken) return;
-
-  const repos = repoDb.findByUserId(userId);
+async function blockUserWrites(userId: string, githubAccessToken: string): Promise<void> {
+  const repos = await repoDb.findByUserId(userId);
   if (repos.length === 0) return;
 
-  const manager = createRulesetManager(user.githubAccessToken);
+  const manager = createRulesetManager(githubAccessToken);
 
   await Promise.all(
     repos.map(async (repo) => {

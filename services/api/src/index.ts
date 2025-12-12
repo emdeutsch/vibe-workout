@@ -6,9 +6,11 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { getConfig } from './config.js';
+import { prisma } from './db.js';
 import authRoutes from './routes/auth.js';
 import repoRoutes from './routes/repos.js';
 import heartbeatRoutes from './routes/heartbeat.js';
+import runsRoutes from './routes/runs.js';
 import { startHeartbeatChecker, stopHeartbeatChecker } from './services/heartbeat-checker.js';
 
 // Load environment variables
@@ -23,18 +25,31 @@ app.use(cors());
 app.use(express.json());
 
 // Health check
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: Date.now(),
-    version: '0.1.0',
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // Test database connection
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      version: '0.1.0',
+      database: 'connected',
+    });
+  } catch {
+    res.status(503).json({
+      status: 'degraded',
+      timestamp: Date.now(),
+      version: '0.1.0',
+      database: 'disconnected',
+    });
+  }
 });
 
 // API Routes
 app.use('/auth', authRoutes);
 app.use('/repos', repoRoutes);
 app.use('/heartbeat', heartbeatRoutes);
+app.use('/runs', runsRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -48,9 +63,13 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 });
 
 // Start server
-function start(): void {
+async function start(): Promise<void> {
   try {
     const config = getConfig();
+
+    // Test database connection
+    await prisma.$connect();
+    console.log('Database connected');
 
     // Start heartbeat checker
     startHeartbeatChecker();
@@ -61,19 +80,18 @@ function start(): void {
     });
 
     // Graceful shutdown
-    process.on('SIGTERM', () => {
-      console.log('SIGTERM received, shutting down...');
+    const shutdown = async (signal: string) => {
+      console.log(`${signal} received, shutting down...`);
       stopHeartbeatChecker();
+      await prisma.$disconnect();
       process.exit(0);
-    });
+    };
 
-    process.on('SIGINT', () => {
-      console.log('SIGINT received, shutting down...');
-      stopHeartbeatChecker();
-      process.exit(0);
-    });
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+    process.on('SIGINT', () => void shutdown('SIGINT'));
   } catch (error) {
     console.error('Failed to start server:', error);
+    await prisma.$disconnect();
     process.exit(1);
   }
 }
