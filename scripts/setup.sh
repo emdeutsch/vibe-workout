@@ -78,6 +78,22 @@ if ! check_command xcodegen; then
     brew install xcodegen
 fi
 
+# Check for Doppler CLI (secrets management)
+if ! check_command doppler; then
+    echo ""
+    echo -e "${YELLOW}Installing Doppler CLI...${NC}"
+    brew install dopplerhq/cli/doppler
+fi
+
+echo ""
+echo "==================================="
+echo "  Setting up environment secrets..."
+echo "==================================="
+echo ""
+
+SCRIPT_DIR="$(dirname "$0")"
+"$SCRIPT_DIR/pull-secrets.sh"
+
 echo ""
 echo "==================================="
 echo "  Installing npm dependencies..."
