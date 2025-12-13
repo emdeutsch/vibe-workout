@@ -14,7 +14,7 @@
  */
 
 import { prisma } from '@viberunner/db';
-import { createSignedPayload, type HrSignalPayload } from '@viberunner/shared';
+import { createSignedPayload } from '@viberunner/shared';
 import { config } from './config.js';
 import { createInstallationOctokit, updateSignalRef } from './github.js';
 
@@ -55,7 +55,7 @@ async function processUser(userId: string, sessionId: string): Promise<void> {
   // Create signed payload with session ID for commit tagging
   const payload = createSignedPayload(
     gateRepos[0].userKey, // All repos for user have same user_key
-    sessionId,           // Session ID for commit tagging
+    sessionId, // Session ID for commit tagging
     isStale ? 0 : hrStatus.bpm, // Set BPM to 0 if stale (will fail hr_ok check)
     hrStatus.thresholdBpm,
     config.hrTtlSeconds,
@@ -77,25 +77,21 @@ async function processUser(userId: string, sessionId: string): Promise<void> {
     try {
       const octokit = await createInstallationOctokit(repo.githubAppInstallationId!);
 
-      await updateSignalRef(
-        octokit,
-        repo.owner,
-        repo.name,
-        repo.signalRef,
-        payloadJson
-      );
+      await updateSignalRef(octokit, repo.owner, repo.name, repo.signalRef, payloadJson);
 
       lastUpdateTimes.set(repoKey, now);
 
       console.log(
         `[${new Date().toISOString()}] Updated ${repoKey}: ` +
-        `hr_ok=${payload.hr_ok}, bpm=${payload.bpm}, expires=${payload.exp_unix}`
+          `hr_ok=${payload.hr_ok}, bpm=${payload.bpm}, expires=${payload.exp_unix}`
       );
     } catch (error) {
       console.error(`Failed to update ${repoKey}:`, error);
     }
   }
 }
+
+let isShuttingDown = false;
 
 /**
  * Main worker loop
@@ -106,7 +102,7 @@ async function runWorker(): Promise<void> {
   console.log(`HR stale threshold: ${config.hrStaleThresholdSeconds}s`);
   console.log(`HR TTL: ${config.hrTtlSeconds}s`);
 
-  while (true) {
+  while (!isShuttingDown) {
     try {
       // Find users with active workout sessions
       const activeSessions = await prisma.workoutSession.findMany({
@@ -116,28 +112,28 @@ async function runWorker(): Promise<void> {
       });
 
       // Process each user with their session ID
-      await Promise.all(
-        activeSessions.map((session) => processUser(session.userId, session.id))
-      );
+      await Promise.all(activeSessions.map((session) => processUser(session.userId, session.id)));
     } catch (error) {
       console.error('Worker loop error:', error);
     }
 
-    // Wait for next poll
-    await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
+    // Wait for next poll (check shutdown flag more frequently)
+    for (let i = 0; i < config.pollIntervalMs / 100 && !isShuttingDown; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
+
+  console.log('Worker stopped');
 }
 
 // Handle graceful shutdown
-process.on('SIGINT', () => {
+const shutdown = () => {
   console.log('Worker shutting down...');
-  process.exit(0);
-});
+  isShuttingDown = true;
+};
 
-process.on('SIGTERM', () => {
-  console.log('Worker shutting down...');
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 // Start worker
 runWorker().catch((error) => {

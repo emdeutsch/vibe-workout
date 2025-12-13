@@ -1,25 +1,36 @@
 import Foundation
 
 enum Config {
+    // MARK: - Info.plist Access
+
+    private static let infoPlist = Bundle.main.infoDictionary ?? [:]
+
     // MARK: - API Configuration
 
-    /// Base URL for the viberunner API
+    /// Base URL for the viberunner API (from xcconfig via Info.plist)
     static var apiBaseURL: String {
-        // In development, use localhost or ngrok URL
-        // In production, use the deployed API URL
-        ProcessInfo.processInfo.environment["VIBERUNNER_API_URL"] ?? "http://localhost:3000"
+        infoPlist["API_BASE_URL"] as? String ?? "http://localhost:3000"
     }
 
     // MARK: - Supabase Configuration
 
-    /// Supabase project URL
+    /// Supabase project URL (from xcconfig via Info.plist)
     static var supabaseURL: String {
-        ProcessInfo.processInfo.environment["SUPABASE_URL"] ?? ""
+        infoPlist["SUPABASE_URL"] as? String ?? ""
     }
 
-    /// Supabase anonymous key
+    /// Supabase anonymous key (from xcconfig via Info.plist)
     static var supabaseAnonKey: String {
-        ProcessInfo.processInfo.environment["SUPABASE_ANON_KEY"] ?? ""
+        infoPlist["SUPABASE_ANON_KEY"] as? String ?? ""
+    }
+
+    /// Current environment name for debugging
+    static var environmentName: String {
+        if apiBaseURL.contains("localhost") || apiBaseURL.contains("192.168") {
+            "Local"
+        } else {
+            "Production"
+        }
     }
 
     // MARK: - GitHub OAuth

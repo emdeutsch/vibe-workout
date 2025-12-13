@@ -12,7 +12,7 @@ import {
   getGitHubUser,
   createUserOctokit,
 } from '../lib/github.js';
-import { config } from '../config.js';
+import { config as _config } from '../config.js';
 import type { GitHubOAuthStartResponse, GitHubOAuthCallbackRequest } from '@viberunner/shared';
 
 const github = new Hono();
@@ -21,14 +21,18 @@ const github = new Hono();
 const oauthStates = new Map<string, { userId: string; createdAt: number }>();
 
 // Cleanup old states every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [state, data] of oauthStates) {
-    if (now - data.createdAt > 10 * 60 * 1000) { // 10 min expiry
-      oauthStates.delete(state);
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [state, data] of oauthStates) {
+      if (now - data.createdAt > 10 * 60 * 1000) {
+        // 10 min expiry
+        oauthStates.delete(state);
+      }
     }
-  }
-}, 5 * 60 * 1000);
+  },
+  5 * 60 * 1000
+);
 
 // Start GitHub OAuth flow
 github.get('/connect', authMiddleware, async (c) => {
@@ -105,9 +109,12 @@ github.post('/callback', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('GitHub OAuth callback error:', error);
-    return c.json({
-      error: error instanceof Error ? error.message : 'OAuth failed',
-    }, 400);
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : 'OAuth failed',
+      },
+      400
+    );
   }
 });
 
