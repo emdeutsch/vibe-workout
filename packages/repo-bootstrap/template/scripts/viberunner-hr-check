@@ -61,6 +61,7 @@ git update-ref -d "$TEMP_REF" 2>/dev/null || true
 # Extract fields from payload
 V=$(echo "$PAYLOAD" | jq -r '.v')
 PAYLOAD_USER_KEY=$(echo "$PAYLOAD" | jq -r '.user_key')
+SESSION_ID=$(echo "$PAYLOAD" | jq -r '.session_id')
 HR_OK=$(echo "$PAYLOAD" | jq -r '.hr_ok')
 BPM=$(echo "$PAYLOAD" | jq -r '.bpm')
 THRESHOLD_BPM=$(echo "$PAYLOAD" | jq -r '.threshold_bpm')
@@ -69,9 +70,9 @@ NONCE=$(echo "$PAYLOAD" | jq -r '.nonce')
 SIG=$(echo "$PAYLOAD" | jq -r '.sig')
 
 # Validate payload structure
-if [[ "$V" == "null" || "$PAYLOAD_USER_KEY" == "null" || "$HR_OK" == "null" || \
-      "$BPM" == "null" || "$THRESHOLD_BPM" == "null" || "$EXP_UNIX" == "null" || \
-      "$NONCE" == "null" || "$SIG" == "null" ]]; then
+if [[ "$V" == "null" || "$PAYLOAD_USER_KEY" == "null" || "$SESSION_ID" == "null" || \
+      "$HR_OK" == "null" || "$BPM" == "null" || "$THRESHOLD_BPM" == "null" || \
+      "$EXP_UNIX" == "null" || "$NONCE" == "null" || "$SIG" == "null" ]]; then
   echo "viberunner: malformed payload — tools locked" >&2
   exit 2
 fi
@@ -90,8 +91,8 @@ if [[ "$EXP_UNIX" -le "$NOW" ]]; then
   exit 2
 fi
 
-# Build canonical payload for signature verification
-CANONICAL=$(echo "$PAYLOAD" | jq -cS '{bpm,exp_unix,hr_ok,nonce,threshold_bpm,user_key,v}')
+# Build canonical payload for signature verification (alphabetical keys)
+CANONICAL=$(echo "$PAYLOAD" | jq -cS '{bpm,exp_unix,hr_ok,nonce,session_id,threshold_bpm,user_key,v}')
 
 # Create temporary files for signature verification
 SIG_BIN=$(mktemp)
@@ -134,5 +135,7 @@ if [[ "$HR_OK" != "true" ]]; then
   exit 2
 fi
 
-# All checks passed
+# All checks passed - output session info for commit tagging
+# Claude can parse this to extract session_id for [vr:SESSION_ID] tags
+echo "viberunner: HR $BPM ✓ — session_id=$SESSION_ID"
 exit 0

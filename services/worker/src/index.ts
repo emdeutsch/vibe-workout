@@ -24,7 +24,7 @@ const lastUpdateTimes = new Map<string, number>();
 /**
  * Process a single user's HR status and update their gate repos
  */
-async function processUser(userId: string): Promise<void> {
+async function processUser(userId: string, sessionId: string): Promise<void> {
   // Get user's HR status
   const hrStatus = await prisma.hrStatus.findUnique({
     where: { userId },
@@ -52,9 +52,10 @@ async function processUser(userId: string): Promise<void> {
     return; // No active gate repos
   }
 
-  // Create signed payload
+  // Create signed payload with session ID for commit tagging
   const payload = createSignedPayload(
     gateRepos[0].userKey, // All repos for user have same user_key
+    sessionId,           // Session ID for commit tagging
     isStale ? 0 : hrStatus.bpm, // Set BPM to 0 if stale (will fail hr_ok check)
     hrStatus.thresholdBpm,
     config.hrTtlSeconds,
@@ -110,13 +111,13 @@ async function runWorker(): Promise<void> {
       // Find users with active workout sessions
       const activeSessions = await prisma.workoutSession.findMany({
         where: { active: true },
-        select: { userId: true },
+        select: { id: true, userId: true },
         distinct: ['userId'],
       });
 
-      // Process each user
+      // Process each user with their session ID
       await Promise.all(
-        activeSessions.map((session) => processUser(session.userId))
+        activeSessions.map((session) => processUser(session.userId, session.id))
       );
     } catch (error) {
       console.error('Worker loop error:', error);

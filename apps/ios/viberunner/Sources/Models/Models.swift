@@ -150,6 +150,172 @@ struct GitHubRepo: Codable, Identifiable {
     }
 }
 
+// MARK: - Workout History
+
+struct WorkoutSummary: Codable {
+    let durationSecs: Int
+    let avgBpm: Int
+    let maxBpm: Int
+    let minBpm: Int
+    let timeAboveThresholdSecs: Int
+    let timeBelowThresholdSecs: Int
+    let thresholdBpm: Int
+    let totalSamples: Int
+
+    enum CodingKeys: String, CodingKey {
+        case durationSecs = "duration_secs"
+        case avgBpm = "avg_bpm"
+        case maxBpm = "max_bpm"
+        case minBpm = "min_bpm"
+        case timeAboveThresholdSecs = "time_above_threshold_secs"
+        case timeBelowThresholdSecs = "time_below_threshold_secs"
+        case thresholdBpm = "threshold_bpm"
+        case totalSamples = "total_samples"
+    }
+
+    var formattedDuration: String {
+        let hours = durationSecs / 3600
+        let minutes = (durationSecs % 3600) / 60
+        let seconds = durationSecs % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+struct WorkoutSessionListItem: Codable, Identifiable {
+    let id: String
+    let startedAt: String
+    let endedAt: String?
+    let active: Bool
+    let source: String
+    let summary: WorkoutSummary?
+    let commitCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, active, source, summary
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case commitCount = "commit_count"
+    }
+
+    var startDate: Date? {
+        ISO8601DateFormatter().date(from: startedAt)
+    }
+
+    var endDate: Date? {
+        guard let ended = endedAt else { return nil }
+        return ISO8601DateFormatter().date(from: ended)
+    }
+}
+
+struct SessionCommit: Codable, Identifiable {
+    let id: String
+    let repoOwner: String
+    let repoName: String
+    let commitSha: String
+    let commitMsg: String
+    let linesAdded: Int?
+    let linesRemoved: Int?
+    let committedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case repoOwner = "repo_owner"
+        case repoName = "repo_name"
+        case commitSha = "commit_sha"
+        case commitMsg = "commit_msg"
+        case linesAdded = "lines_added"
+        case linesRemoved = "lines_removed"
+        case committedAt = "committed_at"
+    }
+
+    var shortSha: String {
+        String(commitSha.prefix(7))
+    }
+
+    var commitDate: Date? {
+        ISO8601DateFormatter().date(from: committedAt)
+    }
+}
+
+struct WorkoutSessionDetail: Codable, Identifiable {
+    let id: String
+    let startedAt: String
+    let endedAt: String?
+    let active: Bool
+    let source: String
+    let summary: WorkoutSummary?
+    let commits: [SessionCommit]
+
+    enum CodingKeys: String, CodingKey {
+        case id, active, source, summary, commits
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+    }
+}
+
+struct HRSample: Codable, Identifiable {
+    let bpm: Int
+    let ts: String
+
+    var id: String { ts }
+
+    var timestamp: Date? {
+        ISO8601DateFormatter().date(from: ts)
+    }
+}
+
+struct HRBucket: Codable, Identifiable {
+    let bucketStart: String
+    let bucketEnd: String
+    let minBpm: Int
+    let maxBpm: Int
+    let avgBpm: Int
+    let sampleCount: Int
+    let timeAboveThresholdSecs: Int
+    let thresholdBpm: Int
+
+    var id: String { bucketStart }
+
+    enum CodingKeys: String, CodingKey {
+        case minBpm = "min_bpm"
+        case maxBpm = "max_bpm"
+        case avgBpm = "avg_bpm"
+        case sampleCount = "sample_count"
+        case timeAboveThresholdSecs = "time_above_threshold_secs"
+        case thresholdBpm = "threshold_bpm"
+        case bucketStart = "bucket_start"
+        case bucketEnd = "bucket_end"
+    }
+
+    var startDate: Date? {
+        ISO8601DateFormatter().date(from: bucketStart)
+    }
+}
+
+struct SessionsListResponse: Codable {
+    let sessions: [WorkoutSessionListItem]
+    let nextCursor: String?
+    let hasMore: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case sessions
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
+    }
+}
+
+struct HRSamplesResponse: Codable {
+    let samples: [HRSample]
+}
+
+struct HRBucketsResponse: Codable {
+    let buckets: [HRBucket]
+}
+
 // MARK: - API Responses
 
 struct ErrorResponse: Codable {

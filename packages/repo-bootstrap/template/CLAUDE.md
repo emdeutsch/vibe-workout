@@ -25,6 +25,19 @@ See `viberunner.config.json` for this repo's configuration:
 - `public_key`: Ed25519 public key for signature verification
 - `ttl_seconds`: How long a signal is valid (typically 15 seconds)
 
+## Commit Tagging
+
+When making commits in this repository, **always include a viberunner session tag** in your commit message. This allows the user to see which commits were made during each workout session.
+
+**Format:** Add `[vr:SESSION_ID]` at the end of your commit message, where `SESSION_ID` is from the current HR signal.
+
+Example:
+```
+feat: add user authentication flow [vr:abc123-def456]
+```
+
+The session ID is available in the HR signal payload. If you can't determine the session ID, omit the tag — don't make one up.
+
 ## How to disable temporarily
 
 To temporarily disable HR gating:

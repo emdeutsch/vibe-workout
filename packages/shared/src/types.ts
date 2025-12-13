@@ -6,6 +6,7 @@
 export interface HrSignalPayload {
   v: number;           // Version (currently 1)
   user_key: string;    // Stable user identifier
+  session_id: string;  // Current workout session ID (for commit tagging)
   hr_ok: boolean;      // Whether HR is above threshold
   bpm: number;         // Current heart rate BPM
   threshold_bpm: number; // User's configured threshold
@@ -18,6 +19,7 @@ export interface HrSignalPayload {
 export interface HrSignalPayloadUnsigned {
   v: number;
   user_key: string;
+  session_id: string;
   hr_ok: boolean;
   bpm: number;
   threshold_bpm: number;

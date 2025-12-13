@@ -3,8 +3,8 @@
  *
  * Canonical signing rule:
  * - Signature is computed over canonical JSON containing exactly:
- *   v, user_key, hr_ok, bpm, threshold_bpm, exp_unix, nonce
- * - Canonicalization: JSON with sorted keys and no whitespace
+ *   v, user_key, session_id, hr_ok, bpm, threshold_bpm, exp_unix, nonce
+ * - Canonicalization: JSON with sorted keys (alphabetically) and no whitespace
  */
 
 import * as ed from '@noble/ed25519';
@@ -33,12 +33,13 @@ export function generateKeyPair(): { privateKey: string; publicKey: string } {
  * Keys are sorted alphabetically, no whitespace
  */
 export function canonicalize(payload: HrSignalPayloadUnsigned): string {
-  // Explicit key ordering for consistency
+  // Explicit key ordering (alphabetical) for consistency
   const canonical = {
     bpm: payload.bpm,
     exp_unix: payload.exp_unix,
     hr_ok: payload.hr_ok,
     nonce: payload.nonce,
+    session_id: payload.session_id,
     threshold_bpm: payload.threshold_bpm,
     user_key: payload.user_key,
     v: payload.v,
@@ -83,6 +84,7 @@ export function verifyPayload(
     const unsigned: HrSignalPayloadUnsigned = {
       v: payload.v,
       user_key: payload.user_key,
+      session_id: payload.session_id,
       hr_ok: payload.hr_ok,
       bpm: payload.bpm,
       threshold_bpm: payload.threshold_bpm,
@@ -163,6 +165,7 @@ export function generateNonce(): string {
  */
 export function createSignedPayload(
   userKey: string,
+  sessionId: string,
   bpm: number,
   thresholdBpm: number,
   ttlSeconds: number,
@@ -173,6 +176,7 @@ export function createSignedPayload(
   const unsigned: HrSignalPayloadUnsigned = {
     v: 1,
     user_key: userKey,
+    session_id: sessionId,
     hr_ok: bpm >= thresholdBpm,
     bpm,
     threshold_bpm: thresholdBpm,

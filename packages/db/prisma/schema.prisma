@@ -37,10 +37,14 @@ model WorkoutSession {
   source    String    @default("watch") // watch, ble
   active    Boolean   @default(true)
 
-  profile   Profile    @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  profile   Profile          @relation(fields: [userId], references: [userId], onDelete: Cascade)
   hrSamples HrSample[]
+  hrBuckets HrBucket[]
+  summary   WorkoutSummary?
+  commits   SessionCommit[]
 
   @@index([userId, active])
+  @@index([userId, startedAt])
   @@map("workout_sessions")
 }
 
@@ -121,4 +125,62 @@ model GateRepo {
   @@unique([owner, name])
   @@index([userId, active])
   @@map("gate_repos")
+}
+
+// HR data bucketed for efficient graph rendering (5-minute intervals)
+model HrBucket {
+  id                     String   @id @default(uuid())
+  sessionId              String   @map("session_id")
+  bucketStart            DateTime @map("bucket_start")
+  bucketEnd              DateTime @map("bucket_end")
+  minBpm                 Int      @map("min_bpm")
+  maxBpm                 Int      @map("max_bpm")
+  avgBpm                 Int      @map("avg_bpm")
+  sampleCount            Int      @map("sample_count")
+  timeAboveThresholdSecs Int      @map("time_above_threshold_secs")
+  thresholdBpm           Int      @map("threshold_bpm")
+
+  session WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, bucketStart])
+  @@map("hr_buckets")
+}
+
+// Computed summary for completed workouts
+model WorkoutSummary {
+  id                     String   @id @default(uuid())
+  sessionId              String   @unique @map("session_id")
+  durationSecs           Int      @map("duration_secs")
+  avgBpm                 Int      @map("avg_bpm")
+  maxBpm                 Int      @map("max_bpm")
+  minBpm                 Int      @map("min_bpm")
+  timeAboveThresholdSecs Int      @map("time_above_threshold_secs")
+  timeBelowThresholdSecs Int      @map("time_below_threshold_secs")
+  thresholdBpm           Int      @map("threshold_bpm")
+  totalSamples           Int      @map("total_samples")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  session WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("workout_summaries")
+}
+
+// Commits tagged to workout sessions (via commit message convention)
+model SessionCommit {
+  id           String   @id @default(uuid())
+  sessionId    String   @map("session_id")
+  repoOwner    String   @map("repo_owner")
+  repoName     String   @map("repo_name")
+  commitSha    String   @map("commit_sha")
+  commitMsg    String   @map("commit_msg")
+  linesAdded   Int?     @map("lines_added")
+  linesRemoved Int?     @map("lines_removed")
+  committedAt  DateTime @map("committed_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  session WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, commitSha])
+  @@index([sessionId])
+  @@map("session_commits")
 }

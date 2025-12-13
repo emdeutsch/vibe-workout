@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import WatchKit
+import ClockKit
 
 @MainActor
 class WorkoutManager: NSObject, ObservableObject {
@@ -12,6 +13,7 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var countdownSeconds: Int = 0
     @Published var currentHeartRate: Int = 0
     @Published var elapsedTime: TimeInterval = 0
+    @Published var threshold: Int = 100
 
     // HealthKit
     private let healthStore = HKHealthStore()
@@ -24,6 +26,11 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Countdown duration (Apple recommends 3 seconds for sensor warm-up)
     private let countdownDuration = 3
+
+    // HR above threshold?
+    var isHROk: Bool {
+        currentHeartRate >= threshold
+    }
 
     var elapsedTimeString: String {
         let minutes = Int(elapsedTime) / 60
@@ -244,6 +251,9 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
                 Task { @MainActor in
                     self.currentHeartRate = heartRate
                     PhoneConnectivityService.shared.sendHeartRate(heartRate)
+
+                    // Reload watch face complications with updated HR
+                    ComplicationController.reloadComplications()
                 }
             }
         }

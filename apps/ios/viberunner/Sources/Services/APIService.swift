@@ -110,6 +110,34 @@ class APIService: ObservableObject {
         return status
     }
 
+    // MARK: - Workout History
+
+    func fetchWorkoutSessions(limit: Int = 20, cursor: String? = nil) async throws -> SessionsListResponse {
+        var path = "api/workout/sessions?limit=\(limit)"
+        if let cursor = cursor {
+            path += "&cursor=\(cursor)"
+        }
+        let data = try await makeRequest(path: path)
+        return try decode(SessionsListResponse.self, from: data)
+    }
+
+    func fetchWorkoutSession(id: String) async throws -> WorkoutSessionDetail {
+        let data = try await makeRequest(path: "api/workout/sessions/\(id)")
+        return try decode(WorkoutSessionDetail.self, from: data)
+    }
+
+    func fetchSessionSamples(sessionId: String) async throws -> [HRSample] {
+        let data = try await makeRequest(path: "api/workout/sessions/\(sessionId)/samples")
+        let response = try decode(HRSamplesResponse.self, from: data)
+        return response.samples
+    }
+
+    func fetchSessionBuckets(sessionId: String) async throws -> [HRBucket] {
+        let data = try await makeRequest(path: "api/workout/sessions/\(sessionId)/buckets")
+        let response = try decode(HRBucketsResponse.self, from: data)
+        return response.buckets
+    }
+
     // MARK: - GitHub
 
     func startGitHubConnect() async throws -> GitHubOAuthStart {

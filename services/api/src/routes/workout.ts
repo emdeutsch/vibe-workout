@@ -198,7 +198,7 @@ workout.get('/status', async (c) => {
   return c.json(response);
 });
 
-// Get recent HR samples
+// Get recent HR samples (legacy endpoint)
 workout.get('/history', async (c) => {
   const userId = c.get('userId');
   const limit = parseInt(c.req.query('limit') || '100', 10);
@@ -216,6 +216,216 @@ workout.get('/history', async (c) => {
       source: s.source,
     })),
   });
+});
+
+// Get workout session list (paginated)
+workout.get('/sessions', async (c) => {
+  const userId = c.get('userId');
+  const limit = parseInt(c.req.query('limit') || '20', 10);
+  const cursor = c.req.query('cursor');
+
+  const sessions = await prisma.workoutSession.findMany({
+    where: { userId },
+    orderBy: { startedAt: 'desc' },
+    take: Math.min(limit, 50) + 1, // Get one extra to check for next page
+    ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+    include: {
+      summary: true,
+      _count: { select: { commits: true } },
+    },
+  });
+
+  const hasMore = sessions.length > limit;
+  const items = hasMore ? sessions.slice(0, -1) : sessions;
+  const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
+
+  return c.json({
+    sessions: items.map((s) => ({
+      id: s.id,
+      started_at: s.startedAt.toISOString(),
+      ended_at: s.endedAt?.toISOString() ?? null,
+      active: s.active,
+      source: s.source,
+      summary: s.summary ? {
+        duration_secs: s.summary.durationSecs,
+        avg_bpm: s.summary.avgBpm,
+        max_bpm: s.summary.maxBpm,
+        min_bpm: s.summary.minBpm,
+        time_above_threshold_secs: s.summary.timeAboveThresholdSecs,
+        time_below_threshold_secs: s.summary.timeBelowThresholdSecs,
+        threshold_bpm: s.summary.thresholdBpm,
+        total_samples: s.summary.totalSamples,
+      } : null,
+      commit_count: s._count.commits,
+    })),
+    next_cursor: nextCursor,
+    has_more: hasMore,
+  });
+});
+
+// Get single workout session detail
+workout.get('/sessions/:sessionId', async (c) => {
+  const userId = c.get('userId');
+  const sessionId = c.req.param('sessionId');
+
+  const session = await prisma.workoutSession.findFirst({
+    where: { id: sessionId, userId },
+    include: {
+      summary: true,
+      commits: {
+        orderBy: { committedAt: 'desc' },
+      },
+    },
+  });
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  return c.json({
+    id: session.id,
+    started_at: session.startedAt.toISOString(),
+    ended_at: session.endedAt?.toISOString() ?? null,
+    active: session.active,
+    source: session.source,
+    summary: session.summary ? {
+      duration_secs: session.summary.durationSecs,
+      avg_bpm: session.summary.avgBpm,
+      max_bpm: session.summary.maxBpm,
+      min_bpm: session.summary.minBpm,
+      time_above_threshold_secs: session.summary.timeAboveThresholdSecs,
+      time_below_threshold_secs: session.summary.timeBelowThresholdSecs,
+      threshold_bpm: session.summary.thresholdBpm,
+      total_samples: session.summary.totalSamples,
+    } : null,
+    commits: session.commits.map((c) => ({
+      id: c.id,
+      repo_owner: c.repoOwner,
+      repo_name: c.repoName,
+      commit_sha: c.commitSha,
+      commit_msg: c.commitMsg,
+      lines_added: c.linesAdded,
+      lines_removed: c.linesRemoved,
+      committed_at: c.committedAt.toISOString(),
+    })),
+  });
+});
+
+// Get HR graph data for a session (raw samples for detailed graphs)
+workout.get('/sessions/:sessionId/samples', async (c) => {
+  const userId = c.get('userId');
+  const sessionId = c.req.param('sessionId');
+
+  // Verify session belongs to user
+  const session = await prisma.workoutSession.findFirst({
+    where: { id: sessionId, userId },
+    select: { id: true },
+  });
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  const samples = await prisma.hrSample.findMany({
+    where: { sessionId },
+    orderBy: { ts: 'asc' },
+    select: { bpm: true, ts: true },
+  });
+
+  return c.json({
+    samples: samples.map((s) => ({
+      bpm: s.bpm,
+      ts: s.ts.toISOString(),
+    })),
+  });
+});
+
+// Get HR buckets for a session (aggregated for faster loading)
+workout.get('/sessions/:sessionId/buckets', async (c) => {
+  const userId = c.get('userId');
+  const sessionId = c.req.param('sessionId');
+
+  // Verify session belongs to user
+  const session = await prisma.workoutSession.findFirst({
+    where: { id: sessionId, userId },
+    select: { id: true },
+  });
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  const buckets = await prisma.hrBucket.findMany({
+    where: { sessionId },
+    orderBy: { bucketStart: 'asc' },
+  });
+
+  return c.json({
+    buckets: buckets.map((b) => ({
+      bucket_start: b.bucketStart.toISOString(),
+      bucket_end: b.bucketEnd.toISOString(),
+      min_bpm: b.minBpm,
+      max_bpm: b.maxBpm,
+      avg_bpm: b.avgBpm,
+      sample_count: b.sampleCount,
+      time_above_threshold_secs: b.timeAboveThresholdSecs,
+      threshold_bpm: b.thresholdBpm,
+    })),
+  });
+});
+
+// Link a commit to a session (called by webhook or manually)
+workout.post('/sessions/:sessionId/commits', async (c) => {
+  const userId = c.get('userId');
+  const sessionId = c.req.param('sessionId');
+  const body = await c.req.json<{
+    repo_owner: string;
+    repo_name: string;
+    commit_sha: string;
+    commit_msg: string;
+    lines_added?: number;
+    lines_removed?: number;
+    committed_at: string;
+  }>();
+
+  // Verify session belongs to user
+  const session = await prisma.workoutSession.findFirst({
+    where: { id: sessionId, userId },
+    select: { id: true },
+  });
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  const commit = await prisma.sessionCommit.upsert({
+    where: {
+      sessionId_commitSha: {
+        sessionId,
+        commitSha: body.commit_sha,
+      },
+    },
+    update: {
+      commitMsg: body.commit_msg,
+      linesAdded: body.lines_added,
+      linesRemoved: body.lines_removed,
+    },
+    create: {
+      sessionId,
+      repoOwner: body.repo_owner,
+      repoName: body.repo_name,
+      commitSha: body.commit_sha,
+      commitMsg: body.commit_msg,
+      linesAdded: body.lines_added,
+      linesRemoved: body.lines_removed,
+      committedAt: new Date(body.committed_at),
+    },
+  });
+
+  return c.json({
+    id: commit.id,
+    commit_sha: commit.commitSha,
+  }, 201);
 });
 
 export { workout };
