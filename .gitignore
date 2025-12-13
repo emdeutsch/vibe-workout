@@ -36,6 +36,10 @@ apps/ios/*.xcuserstate
 apps/ios/xcuserdata/
 apps/ios/DerivedData/
 apps/ios/.build/
+apps/ios/viberunner/Config/Local.xcconfig
+
+# Claude Code
+.claude/
 
 # watchOS
 apps/watch/*.xcuserstate
