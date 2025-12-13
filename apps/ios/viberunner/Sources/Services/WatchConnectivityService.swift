@@ -8,6 +8,7 @@ class WatchConnectivityService: NSObject, ObservableObject {
     @Published var isReachable = false
     @Published var isWatchAppInstalled = false
     @Published var lastReceivedBPM: Int?
+    @Published var lastReceivedTimestamp: Date?
 
     private var session: WCSession?
 
@@ -52,14 +53,32 @@ class WatchConnectivityService: NSObject, ObservableObject {
     }
 
     func sendThresholdUpdate(_ threshold: Int) {
-        guard let session = session, session.isReachable else {
-            print("Watch not reachable")
+        guard let session = session else {
+            print("WCSession not available")
             return
         }
 
-        session.sendMessage(["command": "updateThreshold", "threshold": threshold], replyHandler: nil) { error in
-            print("Failed to send threshold update: \(error)")
+        // Use sendMessage if reachable, otherwise update application context
+        if session.isReachable {
+            session.sendMessage(["command": "updateThreshold", "threshold": threshold], replyHandler: nil) { error in
+                print("Failed to send threshold update: \(error)")
+                // Fallback to application context
+                try? session.updateApplicationContext(["threshold": threshold])
+            }
+        } else {
+            // Send via application context for delivery when watch becomes active
+            try? session.updateApplicationContext(["threshold": threshold])
         }
+    }
+
+    // MARK: - Process Heart Rate
+
+    private func processHeartRate(_ bpm: Int, timestamp: TimeInterval? = nil) async {
+        lastReceivedBPM = bpm
+        lastReceivedTimestamp = timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
+
+        // Forward to workout service
+        await WorkoutService.shared.ingestHeartRate(bpm)
     }
 }
 
@@ -70,6 +89,13 @@ extension WatchConnectivityService: WCSessionDelegate {
         Task { @MainActor in
             self.isWatchAppInstalled = session.isWatchAppInstalled
             self.isReachable = session.isReachable
+
+            // Check for any pending application context from watch
+            let context = session.receivedApplicationContext
+            if let bpm = context["heartRate"] as? Int {
+                let timestamp = context["timestamp"] as? TimeInterval
+                await self.processHeartRate(bpm, timestamp: timestamp)
+            }
         }
 
         if let error = error {
@@ -97,27 +123,41 @@ extension WatchConnectivityService: WCSessionDelegate {
         }
     }
 
-    // Receive messages from watch
+    nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
+        Task { @MainActor in
+            self.isWatchAppInstalled = session.isWatchAppInstalled
+        }
+    }
+
+    // MARK: - Receive Messages (Real-time)
+
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
         Task { @MainActor in
             if let bpm = message["heartRate"] as? Int {
-                self.lastReceivedBPM = bpm
-
-                // Forward to workout service
-                await WorkoutService.shared.ingestHeartRate(bpm)
+                await self.processHeartRate(bpm)
             }
         }
     }
 
-    // Receive messages with reply handler
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String : Any], replyHandler: @escaping ([String : Any]) -> Void) {
         Task { @MainActor in
             if let bpm = message["heartRate"] as? Int {
-                self.lastReceivedBPM = bpm
-                await WorkoutService.shared.ingestHeartRate(bpm)
+                await self.processHeartRate(bpm)
                 replyHandler(["received": true])
             } else {
                 replyHandler(["received": false])
+            }
+        }
+    }
+
+    // MARK: - Receive Application Context (Fallback/Background)
+
+    nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {
+        Task { @MainActor in
+            // Handle heart rate from application context (fallback when sendMessage fails)
+            if let bpm = applicationContext["heartRate"] as? Int {
+                let timestamp = applicationContext["timestamp"] as? TimeInterval
+                await self.processHeartRate(bpm, timestamp: timestamp)
             }
         }
     }

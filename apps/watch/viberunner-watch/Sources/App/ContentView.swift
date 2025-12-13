@@ -5,7 +5,9 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            if workoutManager.isWorkoutActive {
+            if workoutManager.isPreparing {
+                CountdownView()
+            } else if workoutManager.isWorkoutActive {
                 ActiveWorkoutView()
             } else {
                 StartWorkoutView()

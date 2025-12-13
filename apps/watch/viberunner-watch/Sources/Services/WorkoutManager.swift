@@ -8,6 +8,8 @@ class WorkoutManager: NSObject, ObservableObject {
 
     // Published state
     @Published var isWorkoutActive = false
+    @Published var isPreparing = false
+    @Published var countdownSeconds: Int = 0
     @Published var currentHeartRate: Int = 0
     @Published var elapsedTime: TimeInterval = 0
 
@@ -19,6 +21,9 @@ class WorkoutManager: NSObject, ObservableObject {
     // Timer for elapsed time
     private var timer: Timer?
     private var workoutStartDate: Date?
+
+    // Countdown duration (Apple recommends 3 seconds for sensor warm-up)
+    private let countdownDuration = 3
 
     var elapsedTimeString: String {
         let minutes = Int(elapsedTime) / 60
@@ -47,6 +52,9 @@ class WorkoutManager: NSObject, ObservableObject {
             if let error = error {
                 print("HealthKit authorization error: \(error)")
             }
+            if success {
+                print("HealthKit authorization granted")
+            }
         }
     }
 
@@ -69,25 +77,66 @@ class WorkoutManager: NSObject, ObservableObject {
                 workoutConfiguration: configuration
             )
 
-            let startDate = Date()
-            workoutSession?.startActivity(with: startDate)
-            workoutBuilder?.beginCollection(withStart: startDate) { [weak self] success, error in
-                if success {
-                    Task { @MainActor in
-                        self?.isWorkoutActive = true
-                        self?.workoutStartDate = startDate
-                        self?.startTimer()
-                    }
+            // Prepare the session first (warms up sensors)
+            isPreparing = true
+            workoutSession?.prepare()
+
+            // Start countdown to allow sensors to initialize
+            startCountdown()
+
+        } catch {
+            print("Failed to create workout session: \(error)")
+            isPreparing = false
+        }
+    }
+
+    // MARK: - Countdown
+
+    private func startCountdown() {
+        countdownSeconds = countdownDuration
+
+        // Countdown timer
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            Task { @MainActor in
+                guard let self = self else {
+                    timer.invalidate()
+                    return
+                }
+
+                self.countdownSeconds -= 1
+
+                if self.countdownSeconds <= 0 {
+                    timer.invalidate()
+                    self.beginWorkoutActivity()
                 }
             }
-        } catch {
-            print("Failed to start workout: \(error)")
+        }
+    }
+
+    private func beginWorkoutActivity() {
+        isPreparing = false
+
+        let startDate = Date()
+        workoutSession?.startActivity(with: startDate)
+        workoutBuilder?.beginCollection(withStart: startDate) { [weak self] success, error in
+            if success {
+                Task { @MainActor in
+                    self?.isWorkoutActive = true
+                    self?.workoutStartDate = startDate
+                    self?.startTimer()
+                }
+            } else if let error = error {
+                print("Failed to begin workout collection: \(error)")
+            }
         }
     }
 
     func stopWorkout() {
-        workoutSession?.end()
-        stopTimer()
+        guard let session = workoutSession else { return }
+
+        // First, stop the activity to allow final metrics to be collected
+        // This is important - don't skip straight to end()
+        session.stopActivity(with: Date())
     }
 
     // MARK: - Timer
@@ -106,20 +155,20 @@ class WorkoutManager: NSObject, ObservableObject {
         timer = nil
     }
 
-    // MARK: - Heart Rate Processing
+    // MARK: - Cleanup
 
-    private func processHeartRate(_ samples: [HKSample]) {
-        guard let quantitySamples = samples as? [HKQuantitySample] else { return }
+    private func finishWorkout(endDate: Date) {
+        workoutBuilder?.endCollection(withEnd: endDate) { [weak self] success, error in
+            if let error = error {
+                print("Failed to end collection: \(error)")
+            }
 
-        for sample in quantitySamples {
-            let heartRateUnit = HKUnit.count().unitDivided(by: .minute())
-            let heartRate = Int(sample.quantity.doubleValue(for: heartRateUnit))
-
-            Task { @MainActor in
-                self.currentHeartRate = heartRate
-
-                // Send to phone
-                PhoneConnectivityService.shared.sendHeartRate(heartRate)
+            self?.workoutBuilder?.finishWorkout { workout, error in
+                if let error = error {
+                    print("Failed to finish workout: \(error)")
+                } else if let workout = workout {
+                    print("Workout saved: \(workout)")
+                }
             }
         }
     }
@@ -136,20 +185,30 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
     ) {
         Task { @MainActor in
             switch toState {
+            case .prepared:
+                // Session is prepared, countdown should be running
+                print("Workout session prepared, sensors warming up")
+
             case .running:
                 self.isWorkoutActive = true
+                self.isPreparing = false
+
+            case .stopped:
+                // Activity stopped, now we can end the session
+                // This state occurs after stopActivity() is called
+                self.workoutSession?.end()
+
             case .ended:
                 self.isWorkoutActive = false
+                self.isPreparing = false
                 self.currentHeartRate = 0
                 self.elapsedTime = 0
                 self.workoutStartDate = nil
+                self.stopTimer()
 
-                // End collection
-                self.workoutBuilder?.endCollection(withEnd: date) { [weak self] success, error in
-                    self?.workoutBuilder?.finishWorkout { workout, error in
-                        // Workout saved
-                    }
-                }
+                // Finish and save the workout
+                self.finishWorkout(endDate: date)
+
             default:
                 break
             }
@@ -160,6 +219,8 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
         print("Workout session failed: \(error)")
         Task { @MainActor in
             self.isWorkoutActive = false
+            self.isPreparing = false
+            self.stopTimer()
         }
     }
 }
@@ -189,6 +250,6 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
     }
 
     nonisolated func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {
-        // Handle events if needed
+        // Handle workout events if needed
     }
 }
