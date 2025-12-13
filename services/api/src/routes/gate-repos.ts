@@ -55,11 +55,15 @@ function generateBootstrapFiles(userKey: string, publicKey: string): Array<{ pat
     }
   };
 
-  // scripts/viberunner-hr-check - The enforcement script
+  // scripts/viberunner-hr-check - The enforcement script (must match template version)
   const hrCheckScript = `#!/usr/bin/env bash
 #
 # viberunner HR check script
 # Verifies HR signal is valid before allowing Claude Code tool execution
+#
+# Exit codes:
+#   0 - HR OK, tools unlocked
+#   2 - HR check failed, tools locked (Claude Code PreToolUse block code)
 #
 
 set -e
@@ -67,6 +71,11 @@ set -e
 CONFIG_FILE="viberunner.config.json"
 SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Check for required tools
+command -v jq >/dev/null 2>&1 || { echo "viberunner: jq not installed — tools locked" >&2; exit 2; }
+command -v openssl >/dev/null 2>&1 || { echo "viberunner: openssl not installed — tools locked" >&2; exit 2; }
+command -v xxd >/dev/null 2>&1 || { echo "viberunner: xxd not installed — tools locked" >&2; exit 2; }
 
 # Read config
 if [[ ! -f "$REPO_ROOT/$CONFIG_FILE" ]]; then
@@ -79,28 +88,52 @@ PUBLIC_KEY=$(jq -r '.public_key' "$REPO_ROOT/$CONFIG_FILE")
 TTL_SECONDS=$(jq -r '.ttl_seconds' "$REPO_ROOT/$CONFIG_FILE")
 SIGNAL_REF="refs/viberunner/hr/$USER_KEY"
 
-# Fetch the signal ref
-if ! git fetch origin "$SIGNAL_REF:refs/viberunner-check/hr-signal" --quiet 2>/dev/null; then
-  echo "viberunner: HR signal not found — tools locked" >&2
+# Validate config values
+if [[ -z "$USER_KEY" || "$USER_KEY" == "null" ]]; then
+  echo "viberunner: invalid user_key in config — tools locked" >&2
+  exit 2
+fi
+
+if [[ -z "$PUBLIC_KEY" || "$PUBLIC_KEY" == "null" ]]; then
+  echo "viberunner: invalid public_key in config — tools locked" >&2
+  exit 2
+fi
+
+# Fetch the signal ref from origin
+TEMP_REF="refs/viberunner-check/hr-signal"
+if ! git fetch origin "$SIGNAL_REF:$TEMP_REF" --quiet 2>/dev/null; then
+  echo "viberunner: HR signal not found (fetch failed) — tools locked" >&2
   exit 2
 fi
 
 # Read payload from the ref
-PAYLOAD=$(git show refs/viberunner-check/hr-signal:hr-signal.json 2>/dev/null)
+PAYLOAD=$(git show "$TEMP_REF:hr-signal.json" 2>/dev/null)
 if [[ -z "$PAYLOAD" ]]; then
   echo "viberunner: HR payload missing — tools locked" >&2
   exit 2
 fi
 
-# Extract fields
+# Clean up temp ref
+git update-ref -d "$TEMP_REF" 2>/dev/null || true
+
+# Extract fields from payload
 V=$(echo "$PAYLOAD" | jq -r '.v')
 PAYLOAD_USER_KEY=$(echo "$PAYLOAD" | jq -r '.user_key')
+SESSION_ID=$(echo "$PAYLOAD" | jq -r '.session_id')
 HR_OK=$(echo "$PAYLOAD" | jq -r '.hr_ok')
 BPM=$(echo "$PAYLOAD" | jq -r '.bpm')
 THRESHOLD_BPM=$(echo "$PAYLOAD" | jq -r '.threshold_bpm')
 EXP_UNIX=$(echo "$PAYLOAD" | jq -r '.exp_unix')
 NONCE=$(echo "$PAYLOAD" | jq -r '.nonce')
 SIG=$(echo "$PAYLOAD" | jq -r '.sig')
+
+# Validate payload structure
+if [[ "$V" == "null" || "$PAYLOAD_USER_KEY" == "null" || "$SESSION_ID" == "null" || \\
+      "$HR_OK" == "null" || "$BPM" == "null" || "$THRESHOLD_BPM" == "null" || \\
+      "$EXP_UNIX" == "null" || "$NONCE" == "null" || "$SIG" == "null" ]]; then
+  echo "viberunner: malformed payload — tools locked" >&2
+  exit 2
+fi
 
 # Validate user_key matches
 if [[ "$PAYLOAD_USER_KEY" != "$USER_KEY" ]]; then
@@ -111,50 +144,58 @@ fi
 # Check expiration
 NOW=$(date +%s)
 if [[ "$EXP_UNIX" -le "$NOW" ]]; then
-  echo "viberunner: HR signal expired — tools locked" >&2
+  EXPIRED_AGO=$((NOW - EXP_UNIX))
+  echo "viberunner: HR signal expired \${EXPIRED_AGO}s ago — tools locked" >&2
   exit 2
 fi
 
-# Build canonical payload for signature verification
-CANONICAL=$(jq -cS '{bpm,exp_unix,hr_ok,nonce,threshold_bpm,user_key,v}' <<< "$PAYLOAD")
+# Build canonical payload for signature verification (alphabetical keys)
+CANONICAL=$(echo "$PAYLOAD" | jq -cS '{bpm,exp_unix,hr_ok,nonce,session_id,threshold_bpm,user_key,v}')
 
-# Verify signature using openssl
-# Convert hex sig to binary
+# Create temporary files for signature verification
 SIG_BIN=$(mktemp)
+PUB_KEY_BIN=$(mktemp)
+PUB_KEY_PEM=$(mktemp)
+MSG_FILE=$(mktemp)
+
+# Cleanup function
+cleanup() {
+  rm -f "$SIG_BIN" "$PUB_KEY_BIN" "$PUB_KEY_PEM" "$MSG_FILE"
+}
+trap cleanup EXIT
+
+# Convert hex signature to binary
 echo -n "$SIG" | xxd -r -p > "$SIG_BIN"
 
-# Convert hex public key to raw format for openssl
-PUB_KEY_BIN=$(mktemp)
+# Convert hex public key to binary
 echo -n "$PUBLIC_KEY" | xxd -r -p > "$PUB_KEY_BIN"
 
-# Create PEM formatted public key
-PUB_KEY_PEM=$(mktemp)
+# Create PEM formatted Ed25519 public key
+# OID prefix for Ed25519: 302a300506032b6570032100
 {
   echo "-----BEGIN PUBLIC KEY-----"
-  # Ed25519 public key needs OID prefix: 302a300506032b6570032100
   (echo -n "302a300506032b6570032100"; cat "$PUB_KEY_BIN" | xxd -p -c 32) | xxd -r -p | base64
   echo "-----END PUBLIC KEY-----"
 } > "$PUB_KEY_PEM"
 
-# Verify signature
-MSG_FILE=$(mktemp)
+# Write message to file
 echo -n "$CANONICAL" > "$MSG_FILE"
 
+# Verify Ed25519 signature
 if ! openssl pkeyutl -verify -pubin -inkey "$PUB_KEY_PEM" -sigfile "$SIG_BIN" -in "$MSG_FILE" -rawin 2>/dev/null; then
   echo "viberunner: invalid signature — tools locked" >&2
-  rm -f "$SIG_BIN" "$PUB_KEY_BIN" "$PUB_KEY_PEM" "$MSG_FILE"
   exit 2
 fi
 
-rm -f "$SIG_BIN" "$PUB_KEY_BIN" "$PUB_KEY_PEM" "$MSG_FILE"
-
-# Check hr_ok
+# Check hr_ok flag
 if [[ "$HR_OK" != "true" ]]; then
   echo "viberunner: HR $BPM below threshold $THRESHOLD_BPM — tools locked" >&2
   exit 2
 fi
 
-# All checks passed - tools unlocked
+# All checks passed - output session info for commit tagging
+# Claude can parse this to extract session_id for [vr:SESSION_ID] tags
+echo "viberunner: HR $BPM ✓ — session_id=$SESSION_ID"
 exit 0
 `;
 
@@ -178,11 +219,31 @@ Switch to **planning and review mode**:
 - Answer questions about the codebase
 - **Don't spam tool calls** — wait for the user to get their HR up!
 
+## Commit Tagging
+
+When making commits in this repository, **always include a viberunner session tag** in your commit message. This allows the user to see which commits were made during each workout session.
+
+**Format:** Add \`[vr:SESSION_ID]\` at the end of your commit message, where \`SESSION_ID\` is from the current HR signal.
+
+Example:
+\`\`\`
+feat: add user authentication flow [vr:abc123-def456]
+\`\`\`
+
+The session ID is available in the HR signal payload. If you can't determine the session ID, omit the tag — don't make one up.
+
 ## Configuration
 
 - User key: \`${userKey}\`
 - Signal ref: \`${signalRef}\`
 - Public key version: 1
+
+## How to disable temporarily
+
+To temporarily disable HR gating:
+1. Rename \`.claude/settings.json\` to \`.claude/settings.json.disabled\`
+2. Tool calls will work normally
+3. Rename back when ready to re-enable
 `;
 
   return [
@@ -376,6 +437,95 @@ gateRepos.delete('/:id', async (c) => {
   await prisma.gateRepo.delete({ where: { id } });
 
   return c.json({ deleted: true });
+});
+
+// Enable viberunner on an existing repository
+gateRepos.post('/enable', async (c) => {
+  const userId = c.get('userId');
+  const body = await c.req.json<{ owner: string; name: string }>();
+
+  if (!body.owner || !body.name) {
+    return c.json({ error: 'Repository owner and name are required' }, 400);
+  }
+
+  // Check if repo already gated
+  const existing = await prisma.gateRepo.findFirst({
+    where: { owner: body.owner, name: body.name },
+  });
+
+  if (existing) {
+    return c.json({ error: 'Repository is already gated' }, 409);
+  }
+
+  // Get GitHub credentials
+  const [githubAccount, githubToken] = await Promise.all([
+    prisma.githubAccount.findUnique({ where: { userId } }),
+    prisma.githubToken.findUnique({ where: { userId } }),
+  ]);
+
+  if (!githubAccount || !githubToken) {
+    return c.json({ error: 'GitHub not connected. Please connect GitHub first.' }, 400);
+  }
+
+  const accessToken = decrypt(githubToken.encryptedAccessToken);
+  const octokit = createUserOctokit(accessToken);
+  const userKey = githubAccount.username;
+  const signalRef = buildSignalRef(userKey);
+
+  try {
+    // Verify the repo exists and user has access
+    const { data: repoData } = await octokit.request('GET /repos/{owner}/{repo}', {
+      owner: body.owner,
+      repo: body.name,
+    });
+
+    // Check if user has write access
+    if (!repoData.permissions?.push) {
+      return c.json({ error: 'You need write access to this repository' }, 403);
+    }
+
+    // Generate and commit bootstrap files
+    const files = generateBootstrapFiles(userKey, config.signerPublicKey);
+    await commitBootstrapFiles(
+      octokit,
+      body.owner,
+      body.name,
+      files,
+      'Enable viberunner HR gating'
+    );
+
+    // Store gate repo record
+    const gateRepo = await prisma.gateRepo.create({
+      data: {
+        userId,
+        owner: body.owner,
+        name: body.name,
+        userKey,
+        signalRef,
+        active: true,
+      },
+    });
+
+    const response: CreateGateRepoResponse = {
+      id: gateRepo.id,
+      owner: body.owner,
+      name: body.name,
+      user_key: userKey,
+      signal_ref: signalRef,
+      html_url: repoData.html_url,
+      needs_app_install: true,
+    };
+
+    return c.json(response, 201);
+  } catch (error) {
+    console.error('Enable viberunner error:', error);
+    if ((error as any).status === 404) {
+      return c.json({ error: 'Repository not found or no access' }, 404);
+    }
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to enable viberunner',
+    }, 500);
+  }
 });
 
 // GitHub App installation webhook handler

@@ -196,6 +196,17 @@ class APIService: ObservableObject {
         _ = try await fetchGateRepos()
     }
 
+    func enableGateRepo(owner: String, name: String) async throws -> CreateGateRepoResponse {
+        let body = try JSONEncoder().encode(["owner": owner, "name": name])
+        let data = try await makeRequest(path: "api/gate-repos/enable", method: "POST", body: body)
+        let response = try decode(CreateGateRepoResponse.self, from: data)
+
+        // Refresh repos list
+        _ = try await fetchGateRepos()
+
+        return response
+    }
+
     func toggleGateRepo(id: String, active: Bool) async throws {
         let body = try JSONEncoder().encode(["active": active])
         _ = try await makeRequest(path: "api/gate-repos/\(id)", method: "PATCH", body: body)

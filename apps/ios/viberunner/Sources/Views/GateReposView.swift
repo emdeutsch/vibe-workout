@@ -5,6 +5,7 @@ struct GateReposView: View {
 
     @State private var isLoading = false
     @State private var showingCreateSheet = false
+    @State private var showingEnableSheet = false
     @State private var showingError = false
     @State private var errorMessage = ""
 
@@ -44,8 +45,18 @@ struct GateReposView: View {
             .navigationTitle("Gate Repos")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showingCreateSheet = true
+                    Menu {
+                        Button {
+                            showingCreateSheet = true
+                        } label: {
+                            Label("Create New Repo", systemImage: "plus.square")
+                        }
+
+                        Button {
+                            showingEnableSheet = true
+                        } label: {
+                            Label("Enable on Existing Repo", systemImage: "folder.badge.plus")
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -66,6 +77,9 @@ struct GateReposView: View {
             }
             .sheet(isPresented: $showingCreateSheet) {
                 CreateGateRepoSheet()
+            }
+            .sheet(isPresented: $showingEnableSheet) {
+                EnableExistingRepoSheet()
             }
             .alert("Error", isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
