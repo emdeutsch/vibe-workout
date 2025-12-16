@@ -17,7 +17,20 @@ npx prisma migrate deploy
 
 ## iOS Development
 
-### Building and Deploying
+### TestFlight Upload
+
+See `docs/IOS_TESTFLIGHT_UPLOAD.md` for complete CLI upload workflow.
+
+**Quick upload:**
+
+```bash
+cd apps/ios/viberunner && \
+xcodebuild -scheme "Viberunner" -archivePath ./build/Viberunner.xcarchive archive -allowProvisioningUpdates && \
+xcodebuild -exportArchive -archivePath ./build/Viberunner.xcarchive -exportPath ./build/export -exportOptionsPlist ./build/ExportOptions.plist -allowProvisioningUpdates && \
+xcrun altool --upload-app --type ios --file ./build/export/Viberunner.ipa --apiKey 45C93UF2KA --apiIssuer 2643b0ce-38e5-4865-9237-d7979d42aeed
+```
+
+### Local Development
 
 Use the iOS deploy script to build, install, and launch the app on a connected device:
 
