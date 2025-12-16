@@ -1,79 +1,34 @@
 /**
- * GitHub OAuth routes - connect GitHub account for repo creation
+ * GitHub routes - manage GitHub connection for repo operations
+ *
+ * Token comes from Supabase OAuth (with repo scope) - no separate OAuth flow needed
  */
 
 import { Hono } from 'hono';
 import { prisma } from '@viberunner/db';
 import { authMiddleware } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../lib/encryption.js';
-import {
-  buildOAuthUrl,
-  exchangeCodeForToken,
-  getGitHubUser,
-  createUserOctokit,
-} from '../lib/github.js';
-import { config as _config } from '../config.js';
-import type { GitHubOAuthStartResponse, GitHubOAuthCallbackRequest } from '@viberunner/shared';
+import { getGitHubUser, createUserOctokit } from '../lib/github.js';
 
 const github = new Hono();
 
-// In-memory state store (use Redis in production)
-const oauthStates = new Map<string, { userId: string; createdAt: number }>();
-
-// Cleanup old states every 5 minutes
-setInterval(
-  () => {
-    const now = Date.now();
-    for (const [state, data] of oauthStates) {
-      if (now - data.createdAt > 10 * 60 * 1000) {
-        // 10 min expiry
-        oauthStates.delete(state);
-      }
-    }
-  },
-  5 * 60 * 1000
-);
-
-// Start GitHub OAuth flow
-github.get('/connect', authMiddleware, async (c) => {
+// Sync GitHub provider token from Supabase OAuth
+github.post('/sync-token', authMiddleware, async (c) => {
   const userId = c.get('userId');
+  const body = await c.req.json<{ provider_token: string }>();
 
-  // Generate state token
-  const state = crypto.randomUUID();
-  oauthStates.set(state, { userId, createdAt: Date.now() });
-
-  const authorizationUrl = buildOAuthUrl(state);
-
-  const response: GitHubOAuthStartResponse = {
-    authorization_url: authorizationUrl,
-    state,
-  };
-
-  return c.json(response);
-});
-
-// Handle OAuth callback
-github.post('/callback', authMiddleware, async (c) => {
-  const userId = c.get('userId');
-  const body = await c.req.json<GitHubOAuthCallbackRequest>();
-
-  // Validate state
-  const stateData = oauthStates.get(body.state);
-  if (!stateData || stateData.userId !== userId) {
-    return c.json({ error: 'Invalid or expired OAuth state' }, 400);
+  if (!body.provider_token) {
+    return c.json({ error: 'provider_token is required' }, 400);
   }
-  oauthStates.delete(body.state);
 
   try {
-    // Exchange code for token
-    const tokenResponse = await exchangeCodeForToken(body.code);
-
-    // Get GitHub user info
-    const githubUser = await getGitHubUser(tokenResponse.access_token);
+    // Validate token by fetching user info
+    const githubUser = await getGitHubUser(body.provider_token);
 
     // Encrypt and store token
-    const encryptedToken = encrypt(tokenResponse.access_token);
-    const scopes = tokenResponse.scope.split(',').filter(Boolean);
+    const encryptedToken = encrypt(body.provider_token);
+    // Supabase OAuth with repo scope grants these
+    const scopes = ['repo', 'read:user', 'user:email'];
 
     // Upsert GitHub account
     await prisma.githubAccount.upsert({
@@ -108,10 +63,10 @@ github.post('/callback', authMiddleware, async (c) => {
       github_username: githubUser.login,
     });
   } catch (error) {
-    console.error('GitHub OAuth callback error:', error);
+    console.error('GitHub token sync error:', error);
     return c.json(
       {
-        error: error instanceof Error ? error.message : 'OAuth failed',
+        error: error instanceof Error ? error.message : 'Token sync failed',
       },
       400
     );
@@ -145,7 +100,7 @@ github.get('/status', authMiddleware, async (c) => {
   });
 });
 
-// Disconnect GitHub
+// Disconnect GitHub (clear stored token)
 github.delete('/disconnect', authMiddleware, async (c) => {
   const userId = c.get('userId');
 
@@ -153,6 +108,50 @@ github.delete('/disconnect', authMiddleware, async (c) => {
   await prisma.githubAccount.deleteMany({ where: { userId } });
 
   return c.json({ disconnected: true });
+});
+
+// List user's organizations
+github.get('/orgs', authMiddleware, async (c) => {
+  const userId = c.get('userId');
+  console.log('[orgs] Fetching orgs for user:', userId);
+
+  const token = await prisma.githubToken.findUnique({
+    where: { userId },
+  });
+
+  if (!token) {
+    console.log('[orgs] No GitHub token found');
+    return c.json({ error: 'GitHub not connected' }, 400);
+  }
+
+  console.log('[orgs] Token scopes:', token.scopes);
+
+  try {
+    const accessToken = decrypt(token.encryptedAccessToken);
+    const octokit = createUserOctokit(accessToken);
+
+    const { data: orgs } = await octokit.rest.orgs.listForAuthenticatedUser({
+      per_page: 100,
+    });
+
+    console.log(
+      '[orgs] Found',
+      orgs.length,
+      'organizations:',
+      orgs.map((o) => o.login)
+    );
+
+    return c.json({
+      orgs: orgs.map((org) => ({
+        id: org.id,
+        login: org.login,
+        avatar_url: org.avatar_url,
+      })),
+    });
+  } catch (error) {
+    console.error('[orgs] GitHub orgs list error:', error);
+    return c.json({ error: 'Failed to list organizations' }, 500);
+  }
 });
 
 // List user's repositories (for selection)

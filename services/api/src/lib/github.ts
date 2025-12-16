@@ -39,7 +39,7 @@ export async function exchangeCodeForToken(code: string): Promise<{
   const response = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: {
-      'Accept': 'application/json',
+      Accept: 'application/json',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -54,7 +54,7 @@ export async function exchangeCodeForToken(code: string): Promise<{
     throw new Error(`GitHub OAuth token exchange failed: ${response.status}`);
   }
 
-  const data = await response.json() as {
+  const data = (await response.json()) as {
     access_token?: string;
     token_type?: string;
     scope?: string;
@@ -140,20 +140,78 @@ export async function createRepoFromTemplate(
   };
 }
 
+// Repository creation options (beyond name, description, private)
+export interface RepoCreationOptions {
+  has_issues?: boolean;
+  has_wiki?: boolean;
+  has_projects?: boolean;
+  license_template?: string;
+  gitignore_template?: string;
+  allow_squash_merge?: boolean;
+  allow_merge_commit?: boolean;
+  allow_rebase_merge?: boolean;
+  delete_branch_on_merge?: boolean;
+}
+
 /**
- * Create an empty repo
+ * Create an empty repo for the authenticated user
  */
 export async function createEmptyRepo(
   octokit: Octokit,
   name: string,
   description: string,
-  isPrivate: boolean
+  isPrivate: boolean,
+  options?: RepoCreationOptions
 ): Promise<{ owner: string; name: string; html_url: string }> {
   const { data } = await octokit.rest.repos.createForAuthenticatedUser({
     name,
     description,
     private: isPrivate,
     auto_init: true, // Creates with README
+    has_issues: options?.has_issues,
+    has_wiki: options?.has_wiki,
+    has_projects: options?.has_projects,
+    license_template: options?.license_template,
+    gitignore_template: options?.gitignore_template,
+    allow_squash_merge: options?.allow_squash_merge,
+    allow_merge_commit: options?.allow_merge_commit,
+    allow_rebase_merge: options?.allow_rebase_merge,
+    delete_branch_on_merge: options?.delete_branch_on_merge,
+  });
+
+  return {
+    owner: data.owner.login,
+    name: data.name,
+    html_url: data.html_url,
+  };
+}
+
+/**
+ * Create a repo in an organization
+ */
+export async function createRepoInOrg(
+  octokit: Octokit,
+  org: string,
+  name: string,
+  description: string,
+  isPrivate: boolean,
+  options?: RepoCreationOptions
+): Promise<{ owner: string; name: string; html_url: string }> {
+  const { data } = await octokit.rest.repos.createInOrg({
+    org,
+    name,
+    description,
+    private: isPrivate,
+    auto_init: true, // Creates with README
+    has_issues: options?.has_issues,
+    has_wiki: options?.has_wiki,
+    has_projects: options?.has_projects,
+    license_template: options?.license_template,
+    gitignore_template: options?.gitignore_template,
+    allow_squash_merge: options?.allow_squash_merge,
+    allow_merge_commit: options?.allow_merge_commit,
+    allow_rebase_merge: options?.allow_rebase_merge,
+    delete_branch_on_merge: options?.delete_branch_on_merge,
   });
 
   return {
@@ -259,12 +317,14 @@ export async function updateSignalRef(
   const { data: tree } = await octokit.rest.git.createTree({
     owner,
     repo,
-    tree: [{
-      path: 'hr-signal.json',
-      mode: '100644',
-      type: 'blob',
-      sha: blob.sha,
-    }],
+    tree: [
+      {
+        path: 'hr-signal.json',
+        mode: '100644',
+        type: 'blob',
+        sha: blob.sha,
+      },
+    ],
   });
 
   // Create a commit (parentless since this is a signal ref)

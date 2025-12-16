@@ -21,13 +21,29 @@ workout.use('*', authMiddleware);
 // Start a workout session
 workout.post('/start', async (c) => {
   const userId = c.get('userId');
-  const body = await c.req.json<StartWorkoutRequest>().catch(() => ({}));
+  const body = await c.req.json<StartWorkoutRequest>().catch(() => ({}) as StartWorkoutRequest);
 
-  // End any existing active sessions
-  await prisma.workoutSession.updateMany({
+  // End any existing active sessions and clear their repo selections
+  const existingSessions = await prisma.workoutSession.findMany({
     where: { userId, active: true },
-    data: { active: false, endedAt: new Date() },
+    select: { id: true },
   });
+
+  if (existingSessions.length > 0) {
+    // Clear activeSessionId from repos of old sessions
+    await prisma.gateRepo.updateMany({
+      where: {
+        activeSessionId: { in: existingSessions.map((s) => s.id) },
+      },
+      data: { activeSessionId: null },
+    });
+
+    // End old sessions
+    await prisma.workoutSession.updateMany({
+      where: { userId, active: true },
+      data: { active: false, endedAt: new Date() },
+    });
+  }
 
   // Create new session
   const session = await prisma.workoutSession.create({
@@ -38,9 +54,32 @@ workout.post('/start', async (c) => {
     },
   });
 
+  // Activate selected repos for this session
+  let selectedRepos: Array<{ id: string; owner: string; name: string }> = [];
+  if (body.repo_ids && body.repo_ids.length > 0) {
+    // Update repos to be active for this session
+    await prisma.gateRepo.updateMany({
+      where: {
+        id: { in: body.repo_ids },
+        userId, // Ensure user owns these repos
+        active: true,
+        githubAppInstallationId: { not: null }, // Only repos with app installed
+      },
+      data: { activeSessionId: session.id },
+    });
+
+    // Fetch the repos that were activated
+    const repos = await prisma.gateRepo.findMany({
+      where: { activeSessionId: session.id },
+      select: { id: true, owner: true, name: true },
+    });
+    selectedRepos = repos;
+  }
+
   const response: StartWorkoutResponse = {
     session_id: session.id,
     started_at: session.startedAt.toISOString(),
+    selected_repos: selectedRepos.length > 0 ? selectedRepos : undefined,
   };
 
   return c.json(response, 201);
@@ -50,14 +89,29 @@ workout.post('/start', async (c) => {
 workout.post('/stop', async (c) => {
   const userId = c.get('userId');
 
+  // Get active sessions to clear their repo selections
+  const activeSessions = await prisma.workoutSession.findMany({
+    where: { userId, active: true },
+    select: { id: true },
+  });
+
+  if (activeSessions.length === 0) {
+    return c.json({ error: 'No active workout session' }, 404);
+  }
+
+  // Clear activeSessionId from repos
+  await prisma.gateRepo.updateMany({
+    where: {
+      activeSessionId: { in: activeSessions.map((s) => s.id) },
+    },
+    data: { activeSessionId: null },
+  });
+
+  // End sessions
   const result = await prisma.workoutSession.updateMany({
     where: { userId, active: true },
     data: { active: false, endedAt: new Date() },
   });
-
-  if (result.count === 0) {
-    return c.json({ error: 'No active workout session' }, 404);
-  }
 
   // Expire HR status
   await prisma.hrStatus.updateMany({
@@ -78,6 +132,11 @@ workout.get('/active', async (c) => {
   const session = await prisma.workoutSession.findFirst({
     where: { userId, active: true },
     orderBy: { startedAt: 'desc' },
+    include: {
+      activeGateRepos: {
+        select: { id: true, owner: true, name: true },
+      },
+    },
   });
 
   if (!session) {
@@ -89,6 +148,7 @@ workout.get('/active', async (c) => {
     session_id: session.id,
     started_at: session.startedAt.toISOString(),
     source: session.source,
+    selected_repos: session.activeGateRepos.length > 0 ? session.activeGateRepos : undefined,
   });
 });
 
@@ -246,16 +306,18 @@ workout.get('/sessions', async (c) => {
       ended_at: s.endedAt?.toISOString() ?? null,
       active: s.active,
       source: s.source,
-      summary: s.summary ? {
-        duration_secs: s.summary.durationSecs,
-        avg_bpm: s.summary.avgBpm,
-        max_bpm: s.summary.maxBpm,
-        min_bpm: s.summary.minBpm,
-        time_above_threshold_secs: s.summary.timeAboveThresholdSecs,
-        time_below_threshold_secs: s.summary.timeBelowThresholdSecs,
-        threshold_bpm: s.summary.thresholdBpm,
-        total_samples: s.summary.totalSamples,
-      } : null,
+      summary: s.summary
+        ? {
+            duration_secs: s.summary.durationSecs,
+            avg_bpm: s.summary.avgBpm,
+            max_bpm: s.summary.maxBpm,
+            min_bpm: s.summary.minBpm,
+            time_above_threshold_secs: s.summary.timeAboveThresholdSecs,
+            time_below_threshold_secs: s.summary.timeBelowThresholdSecs,
+            threshold_bpm: s.summary.thresholdBpm,
+            total_samples: s.summary.totalSamples,
+          }
+        : null,
       commit_count: s._count.commits,
     })),
     next_cursor: nextCursor,
@@ -288,16 +350,18 @@ workout.get('/sessions/:sessionId', async (c) => {
     ended_at: session.endedAt?.toISOString() ?? null,
     active: session.active,
     source: session.source,
-    summary: session.summary ? {
-      duration_secs: session.summary.durationSecs,
-      avg_bpm: session.summary.avgBpm,
-      max_bpm: session.summary.maxBpm,
-      min_bpm: session.summary.minBpm,
-      time_above_threshold_secs: session.summary.timeAboveThresholdSecs,
-      time_below_threshold_secs: session.summary.timeBelowThresholdSecs,
-      threshold_bpm: session.summary.thresholdBpm,
-      total_samples: session.summary.totalSamples,
-    } : null,
+    summary: session.summary
+      ? {
+          duration_secs: session.summary.durationSecs,
+          avg_bpm: session.summary.avgBpm,
+          max_bpm: session.summary.maxBpm,
+          min_bpm: session.summary.minBpm,
+          time_above_threshold_secs: session.summary.timeAboveThresholdSecs,
+          time_below_threshold_secs: session.summary.timeBelowThresholdSecs,
+          threshold_bpm: session.summary.thresholdBpm,
+          total_samples: session.summary.totalSamples,
+        }
+      : null,
     commits: session.commits.map((c) => ({
       id: c.id,
       repo_owner: c.repoOwner,
@@ -422,10 +486,13 @@ workout.post('/sessions/:sessionId/commits', async (c) => {
     },
   });
 
-  return c.json({
-    id: commit.id,
-    commit_sha: commit.commitSha,
-  }, 201);
+  return c.json(
+    {
+      id: commit.id,
+      commit_sha: commit.commitSha,
+    },
+    201
+  );
 });
 
 export { workout };

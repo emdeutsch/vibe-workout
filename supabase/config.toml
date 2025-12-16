@@ -114,9 +114,9 @@ max_frequency = "5s"
 # GitHub OAuth for local development
 [auth.external.github]
 enabled = true
-client_id = "Ov23li6JMVHa7HNjRtja"
-secret = "0ac938059c62f591228d59ea7b4ac63eab465c86"
-redirect_uri = "http://127.0.0.1:54421/auth/v1/callback"
+client_id = "env(SUPABASE_AUTH_GITHUB_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_GITHUB_SECRET)"
+redirect_uri = "http://192.168.1.144:54421/auth/v1/callback"
 
 [auth.external.apple]
 enabled = false

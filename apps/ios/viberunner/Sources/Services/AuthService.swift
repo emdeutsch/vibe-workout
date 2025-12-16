@@ -1,15 +1,10 @@
 import Foundation
 import UIKit
 import Supabase
+import AuthenticationServices
 import os.log
 
 private let logger = Logger(subsystem: "com.viberunner.app", category: "AuthService")
-
-// NSLog wrapper for reliable syslog capture
-private func log(_ message: String) {
-    NSLog("[AuthService] %@", message)
-    logger.info("\(message)")
-}
 
 @MainActor
 class AuthService: ObservableObject {
@@ -30,12 +25,12 @@ class AuthService: ObservableObject {
     }
 
     private func setupSupabase() {
-        log("setupSupabase called")
-        log("Config.supabaseURL: '\(Config.supabaseURL)'")
-        log("Config.supabaseAnonKey: '\(String(Config.supabaseAnonKey.prefix(20)))...'")
+        logger.info("setupSupabase called")
+        logger.debug("Config.supabaseURL: '\(Config.supabaseURL)'")
+        logger.debug("Config.supabaseAnonKey: '\(String(Config.supabaseAnonKey.prefix(20)))...'")
 
         guard !Config.supabaseURL.isEmpty, !Config.supabaseAnonKey.isEmpty else {
-            log("ERROR: Supabase configuration missing!")
+            logger.error("Supabase configuration missing!")
             return
         }
 
@@ -43,7 +38,7 @@ class AuthService: ObservableObject {
             supabaseURL: URL(string: Config.supabaseURL)!,
             supabaseKey: Config.supabaseAnonKey
         )
-        log("Supabase client initialized successfully")
+        logger.info("Supabase client initialized successfully")
     }
 
     // MARK: - Session Management
@@ -76,12 +71,11 @@ class AuthService: ObservableObject {
     // MARK: - GitHub Sign In
 
     func signInWithGitHub() async throws {
-        log("signInWithGitHub called")
-        log("Supabase URL: \(Config.supabaseURL)")
-        log("Callback URL: \(Config.githubOAuthCallbackURL)")
+        logger.info("signInWithGitHub called")
+        logger.debug("Supabase URL: \(Config.supabaseURL)")
 
         guard let supabase = supabase else {
-            log("ERROR: Supabase not configured")
+            logger.error("Supabase not configured")
             self.error = "Supabase not configured. Check your settings."
             throw AuthError.notConfigured
         }
@@ -90,27 +84,49 @@ class AuthService: ObservableObject {
         error = nil
 
         do {
-            log("Getting OAuth URL...")
-            let url = try await supabase.auth.getOAuthSignInURL(
+            logger.info("Starting OAuth flow with ASWebAuthenticationSession...")
+            // Request repo scope so we can create/manage repos without separate OAuth
+            let session = try await supabase.auth.signInWithOAuth(
                 provider: .github,
-                redirectTo: URL(string: Config.githubOAuthCallbackURL)
-            )
-            log("Got OAuth URL: \(url)")
+                redirectTo: URL(string: Config.githubOAuthCallbackURL),
+                scopes: "repo read:user user:email"
+            ) { (session: ASWebAuthenticationSession) in
+                session.prefersEphemeralWebBrowserSession = false
+            }
+            logger.info("OAuth completed successfully, user: \(session.user.email ?? "no email")")
+            currentUser = session.user
+            isAuthenticated = true
+            isLoading = false
 
-            // Open the URL in Safari
-            await MainActor.run {
-                log("Opening URL in Safari...")
-                UIApplication.shared.open(url)
+            // Sync GitHub token to backend for repo operations
+            if let providerToken = session.providerToken {
+                logger.info("Provider token available, syncing to backend...")
+                await syncGitHubToken(providerToken: providerToken)
+            } else {
+                logger.warning("No provider token returned from OAuth")
             }
         } catch {
-            log("ERROR: OAuth error: \(error.localizedDescription)")
+            logger.error("OAuth error: \(error.localizedDescription)")
             self.error = error.localizedDescription
             isLoading = false
             throw error
         }
     }
 
+    /// Sync GitHub provider token to backend for repo operations
+    private func syncGitHubToken(providerToken: String) async {
+        do {
+            try await APIService.shared.syncGitHubToken(providerToken: providerToken)
+            logger.info("GitHub token synced successfully")
+        } catch {
+            logger.error("Failed to sync GitHub token: \(error.localizedDescription)")
+            // Don't fail the sign-in, user can still use the app
+        }
+    }
+
+    // Keep for backward compatibility if needed for deep link handling
     func handleOAuthCallback(url: URL) async throws {
+        logger.info("handleOAuthCallback called with URL: \(url)")
         guard let supabase = supabase else {
             throw AuthError.notConfigured
         }
@@ -123,7 +139,9 @@ class AuthService: ObservableObject {
             currentUser = session.user
             isAuthenticated = true
             isLoading = false
+            logger.info("OAuth callback handled successfully")
         } catch {
+            logger.error("OAuth callback error: \(error.localizedDescription)")
             self.error = error.localizedDescription
             isLoading = false
             throw error

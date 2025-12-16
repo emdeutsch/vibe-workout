@@ -1,13 +1,17 @@
 // Prisma schema for viberunner - managed against Supabase Postgres
-// Run: npx prisma generate && npx prisma db push
+// Development: npx prisma migrate dev --name <description>
+// Production:  npx prisma migrate deploy
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["public"]
 }
 
 // User profile with HR threshold settings
@@ -26,6 +30,7 @@ model Profile {
   gateRepos       GateRepo[]
 
   @@map("profiles")
+  @@schema("public")
 }
 
 // Workout session tracking
@@ -42,10 +47,12 @@ model WorkoutSession {
   hrBuckets HrBucket[]
   summary   WorkoutSummary?
   commits   SessionCommit[]
+  activeGateRepos GateRepo[]   // Repos selected for this workout session
 
   @@index([userId, active])
   @@index([userId, startedAt])
   @@map("workout_sessions")
+  @@schema("public")
 }
 
 // Individual HR samples from devices
@@ -63,6 +70,7 @@ model HrSample {
   @@index([userId, ts])
   @@index([sessionId])
   @@map("hr_samples")
+  @@schema("public")
 }
 
 // Current HR status (derived, used for quick lookups)
@@ -78,6 +86,7 @@ model HrStatus {
   profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@map("hr_status")
+  @@schema("public")
 }
 
 // GitHub account info (from OAuth)
@@ -90,6 +99,7 @@ model GithubAccount {
   profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@map("github_accounts")
+  @@schema("public")
 }
 
 // GitHub OAuth tokens (encrypted at rest)
@@ -103,6 +113,7 @@ model GithubToken {
   profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@map("github_tokens")
+  @@schema("public")
 }
 
 // Gate repos - repos that receive HR signal refs
@@ -115,16 +126,20 @@ model GateRepo {
   signalRef               String   @map("signal_ref") // Full ref path: refs/viberunner/hr/<user_key>
   githubAppInstallationId Int?     @map("github_app_installation_id")
   active                  Boolean  @default(true)
+  activeSessionId         String?  @map("active_session_id") // Set when repo is selected for a workout
   bootstrapVersion        Int      @default(1) @map("bootstrap_version")
   signerKeyVersion        Int      @default(1) @map("signer_key_version")
   createdAt               DateTime @default(now()) @map("created_at")
   updatedAt               DateTime @updatedAt @map("updated_at")
 
-  profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  profile       Profile         @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  activeSession WorkoutSession? @relation(fields: [activeSessionId], references: [id], onDelete: SetNull)
 
   @@unique([owner, name])
   @@index([userId, active])
+  @@index([activeSessionId])
   @@map("gate_repos")
+  @@schema("public")
 }
 
 // HR data bucketed for efficient graph rendering (5-minute intervals)
@@ -144,6 +159,7 @@ model HrBucket {
 
   @@index([sessionId, bucketStart])
   @@map("hr_buckets")
+  @@schema("public")
 }
 
 // Computed summary for completed workouts
@@ -163,6 +179,7 @@ model WorkoutSummary {
   session WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@map("workout_summaries")
+  @@schema("public")
 }
 
 // Commits tagged to workout sessions (via commit message convention)
@@ -183,4 +200,5 @@ model SessionCommit {
   @@unique([sessionId, commitSha])
   @@index([sessionId])
   @@map("session_commits")
+  @@schema("public")
 }

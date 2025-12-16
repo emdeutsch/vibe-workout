@@ -10,7 +10,9 @@ import {
   createUserOctokit,
   createRepoFromTemplate,
   createEmptyRepo,
+  createRepoInOrg,
   commitBootstrapFiles,
+  type RepoCreationOptions,
 } from '../lib/github.js';
 import { config } from '../config.js';
 import { buildSignalRef, PAYLOAD_FILENAME, SIGNAL_REF_PATTERN } from '@viberunner/shared';
@@ -23,13 +25,22 @@ import type {
 
 const gateRepos = new Hono();
 
-// Apply auth to all routes
-gateRepos.use('*', authMiddleware);
+// Apply auth to all routes except webhooks
+gateRepos.use('*', async (c, next) => {
+  // Skip auth for webhook endpoints
+  if (c.req.path.includes('/webhook/')) {
+    return next();
+  }
+  return authMiddleware(c, next);
+});
 
 /**
  * Generate bootstrap files for a gate repo
  */
-function generateBootstrapFiles(userKey: string, publicKey: string): Array<{ path: string; content: string }> {
+function generateBootstrapFiles(
+  userKey: string,
+  publicKey: string
+): Array<{ path: string; content: string }> {
   const signalRef = buildSignalRef(userKey);
 
   // viberunner.config.json
@@ -49,10 +60,10 @@ function generateBootstrapFiles(userKey: string, publicKey: string): Array<{ pat
       PreToolUse: [
         {
           matcher: '*',
-          hooks: ['./scripts/viberunner-hr-check']
-        }
-      ]
-    }
+          hooks: ['./scripts/viberunner-hr-check'],
+        },
+      ],
+    },
   };
 
   // scripts/viberunner-hr-check - The enforcement script (must match template version)
@@ -254,16 +265,71 @@ To temporarily disable HR gating:
   ];
 }
 
-// List gate repos
+// List gate repos (verifies repos still exist on GitHub)
 gateRepos.get('/', async (c) => {
   const userId = c.get('userId');
+
+  // Get user's GitHub token for verification
+  const githubToken = await prisma.githubToken.findUnique({
+    where: { userId },
+  });
 
   const repos = await prisma.gateRepo.findMany({
     where: { userId },
     orderBy: { createdAt: 'desc' },
   });
 
-  const response: GateRepoResponse[] = repos.map((repo) => ({
+  // If no GitHub token, return repos without verification
+  if (!githubToken) {
+    const response: GateRepoResponse[] = repos.map((repo) => ({
+      id: repo.id,
+      owner: repo.owner,
+      name: repo.name,
+      user_key: repo.userKey,
+      signal_ref: repo.signalRef,
+      active: repo.active,
+      github_app_installed: !!repo.githubAppInstallationId,
+      created_at: repo.createdAt.toISOString(),
+    }));
+    return c.json({ repos: response });
+  }
+
+  // Verify each repo still exists on GitHub
+  const accessToken = decrypt(githubToken.encryptedAccessToken);
+  const octokit = createUserOctokit(accessToken);
+
+  const verifiedRepos: typeof repos = [];
+  const deletedRepoIds: string[] = [];
+
+  await Promise.all(
+    repos.map(async (repo) => {
+      try {
+        await octokit.rest.repos.get({
+          owner: repo.owner,
+          repo: repo.name,
+        });
+        verifiedRepos.push(repo);
+      } catch (error: unknown) {
+        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+          console.log(`Repo ${repo.owner}/${repo.name} no longer exists on GitHub, removing`);
+          deletedRepoIds.push(repo.id);
+        } else {
+          // Other errors - keep the repo
+          console.error(`Error checking repo ${repo.owner}/${repo.name}:`, error);
+          verifiedRepos.push(repo);
+        }
+      }
+    })
+  );
+
+  // Remove deleted repos from database
+  if (deletedRepoIds.length > 0) {
+    await prisma.gateRepo.deleteMany({
+      where: { id: { in: deletedRepoIds } },
+    });
+  }
+
+  const response: GateRepoResponse[] = verifiedRepos.map((repo) => ({
     id: repo.id,
     owner: repo.owner,
     name: repo.name,
@@ -274,7 +340,93 @@ gateRepos.get('/', async (c) => {
     created_at: repo.createdAt.toISOString(),
   }));
 
-  return c.json({ repos: response });
+  return c.json({ repos: response, deleted_count: deletedRepoIds.length });
+});
+
+// List repos available for workout selection (only repos with GitHub App installed)
+// Also verifies repos still exist on GitHub and removes deleted ones
+gateRepos.get('/selectable', async (c) => {
+  const userId = c.get('userId');
+
+  // Get user's GitHub token for verification
+  const githubToken = await prisma.githubToken.findUnique({
+    where: { userId },
+  });
+
+  const repos = await prisma.gateRepo.findMany({
+    where: {
+      userId,
+      active: true,
+      githubAppInstallationId: { not: null },
+    },
+    orderBy: { name: 'asc' },
+    select: {
+      id: true,
+      owner: true,
+      name: true,
+    },
+  });
+
+  // If no GitHub token, return repos without verification
+  if (!githubToken) {
+    return c.json({
+      repos: repos.map((repo) => ({
+        id: repo.id,
+        owner: repo.owner,
+        name: repo.name,
+        full_name: `${repo.owner}/${repo.name}`,
+      })),
+    });
+  }
+
+  // Verify each repo still exists on GitHub
+  const accessToken = decrypt(githubToken.encryptedAccessToken);
+  const octokit = createUserOctokit(accessToken);
+
+  const verifiedRepos: typeof repos = [];
+  const deletedRepoIds: string[] = [];
+
+  await Promise.all(
+    repos.map(async (repo) => {
+      try {
+        await octokit.rest.repos.get({
+          owner: repo.owner,
+          repo: repo.name,
+        });
+        // Repo exists
+        verifiedRepos.push(repo);
+      } catch (error: unknown) {
+        // Check if repo was deleted (404)
+        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+          console.log(
+            `Repo ${repo.owner}/${repo.name} no longer exists on GitHub, marking for removal`
+          );
+          deletedRepoIds.push(repo.id);
+        } else {
+          // Other errors (rate limit, network) - keep the repo in the list
+          console.error(`Error checking repo ${repo.owner}/${repo.name}:`, error);
+          verifiedRepos.push(repo);
+        }
+      }
+    })
+  );
+
+  // Remove deleted repos from database
+  if (deletedRepoIds.length > 0) {
+    await prisma.gateRepo.deleteMany({
+      where: { id: { in: deletedRepoIds } },
+    });
+  }
+
+  return c.json({
+    repos: verifiedRepos.map((repo) => ({
+      id: repo.id,
+      owner: repo.owner,
+      name: repo.name,
+      full_name: `${repo.owner}/${repo.name}`,
+    })),
+    deleted_count: deletedRepoIds.length,
+  });
 });
 
 // Create a new gate repo
@@ -301,28 +453,56 @@ gateRepos.post('/', async (c) => {
   const userKey = githubAccount.username; // Use GitHub username as user_key
   const signalRef = buildSignalRef(userKey);
 
+  // Build repo creation options from request
+  const repoOptions: RepoCreationOptions = {
+    has_issues: body.has_issues,
+    has_wiki: body.has_wiki,
+    has_projects: body.has_projects,
+    license_template: body.license_template,
+    gitignore_template: body.gitignore_template,
+    allow_squash_merge: body.allow_squash_merge,
+    allow_merge_commit: body.allow_merge_commit,
+    allow_rebase_merge: body.allow_rebase_merge,
+    delete_branch_on_merge: body.delete_branch_on_merge,
+  };
+
   try {
     let repoInfo: { owner: string; name: string; html_url: string };
 
     // Try template first, fall back to empty repo
     try {
+      // Note: Template repos don't support advanced settings, they inherit from template
       repoInfo = await createRepoFromTemplate(
         octokit,
         config.templateRepoOwner,
         config.templateRepoName,
-        githubAccount.username,
+        body.org || githubAccount.username, // Use org if specified
         body.name,
         body.description || 'viberunner HR-gated repository',
         body.private ?? true
       );
     } catch {
-      // Template doesn't exist, create empty repo
-      repoInfo = await createEmptyRepo(
-        octokit,
-        body.name,
-        body.description || 'viberunner HR-gated repository',
-        body.private ?? true
-      );
+      // Template doesn't exist, create empty repo (with full settings support)
+      if (body.org) {
+        // Create in organization
+        repoInfo = await createRepoInOrg(
+          octokit,
+          body.org,
+          body.name,
+          body.description || 'viberunner HR-gated repository',
+          body.private ?? true,
+          repoOptions
+        );
+      } else {
+        // Create in user's account
+        repoInfo = await createEmptyRepo(
+          octokit,
+          body.name,
+          body.description || 'viberunner HR-gated repository',
+          body.private ?? true,
+          repoOptions
+        );
+      }
 
       // Commit bootstrap files
       const files = generateBootstrapFiles(userKey, config.signerPublicKey);
@@ -347,6 +527,10 @@ gateRepos.post('/', async (c) => {
       },
     });
 
+    // Build GitHub App installation URL
+    // Simple URL that lets user select the repo during installation
+    const installUrl = `https://github.com/apps/viberunner-ai/installations/new`;
+
     const response: CreateGateRepoResponse = {
       id: gateRepo.id,
       owner: repoInfo.owner,
@@ -355,14 +539,18 @@ gateRepos.post('/', async (c) => {
       signal_ref: signalRef,
       html_url: repoInfo.html_url,
       needs_app_install: true, // User needs to install GitHub App
+      install_url: body.auto_install_app ? installUrl : undefined,
     };
 
     return c.json(response, 201);
   } catch (error) {
     console.error('Create gate repo error:', error);
-    return c.json({
-      error: error instanceof Error ? error.message : 'Failed to create repository',
-    }, 500);
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : 'Failed to create repository',
+      },
+      500
+    );
   }
 });
 
@@ -501,8 +689,9 @@ gateRepos.get('/:id/install-url', async (c) => {
     return c.json({ error: 'Repository not found' }, 404);
   }
 
-  // GitHub App installation URL with repo pre-selected
-  const installUrl = `https://github.com/apps/viberunner/installations/new/permissions?target_id=${repo.owner}&suggested_target_id=${repo.owner}&repository_ids[]=${repo.name}`;
+  // GitHub App installation URL
+  // Simple URL - user will select the repo during installation
+  const installUrl = `https://github.com/apps/viberunner-ai/installations/new`;
 
   return c.json({
     install_url: installUrl,

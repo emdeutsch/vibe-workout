@@ -61,3 +61,4 @@ supabase/.temp/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcuserdata/
+supabase/.env

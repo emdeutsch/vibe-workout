@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "installCommand": "cd ../.. && npm install --include=dev",
+  "buildCommand": "cd ../.. && npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma && npx turbo build --filter=@viberunner/api",
+  "outputDirectory": "dist",
+  "framework": "hono"
+}

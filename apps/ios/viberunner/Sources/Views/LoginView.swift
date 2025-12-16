@@ -3,11 +3,6 @@ import os.log
 
 private let logger = Logger(subsystem: "com.viberunner.app", category: "LoginView")
 
-private func log(_ message: String) {
-    NSLog("[LoginView] %@", message)
-    logger.info("\(message)")
-}
-
 struct LoginView: View {
     @EnvironmentObject var authService: AuthService
 
@@ -41,11 +36,11 @@ struct LoginView: View {
                     // GitHub Sign In (primary)
                     Button {
                         Task {
-                            log("GitHub sign in button tapped")
+                            logger.info("GitHub sign in button tapped")
                             do {
                                 try await authService.signInWithGitHub()
                             } catch {
-                                log("GitHub sign in error: \(error.localizedDescription)")
+                                logger.error("GitHub sign in error: \(error.localizedDescription)")
                             }
                         }
                     } label: {

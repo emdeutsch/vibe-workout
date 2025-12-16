@@ -39,10 +39,12 @@ struct HRStatus: Codable {
 struct WorkoutSession: Codable {
     let sessionId: String
     let startedAt: String
+    let selectedRepos: [SelectedRepo]?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case startedAt = "started_at"
+        case selectedRepos = "selected_repos"
     }
 }
 
@@ -51,12 +53,48 @@ struct ActiveWorkout: Codable {
     let sessionId: String?
     let startedAt: String?
     let source: String?
+    let selectedRepos: [SelectedRepo]?
 
     enum CodingKeys: String, CodingKey {
         case active
         case sessionId = "session_id"
         case startedAt = "started_at"
         case source
+        case selectedRepos = "selected_repos"
+    }
+}
+
+// Repo selected for a workout session
+struct SelectedRepo: Codable, Identifiable {
+    let id: String
+    let owner: String
+    let name: String
+
+    var fullName: String {
+        "\(owner)/\(name)"
+    }
+}
+
+// Repo available for selection (has GitHub App installed)
+struct SelectableRepo: Codable, Identifiable {
+    let id: String
+    let owner: String
+    let name: String
+    let fullName: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, owner, name
+        case fullName = "full_name"
+    }
+}
+
+struct SelectableReposResponse: Codable {
+    let repos: [SelectableRepo]
+    let deletedCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case repos
+        case deletedCount = "deleted_count"
     }
 }
 
@@ -93,6 +131,7 @@ struct CreateGateRepoResponse: Codable {
     let signalRef: String
     let htmlUrl: String
     let needsAppInstall: Bool
+    let installUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case id, owner, name
@@ -100,6 +139,7 @@ struct CreateGateRepoResponse: Codable {
         case signalRef = "signal_ref"
         case htmlUrl = "html_url"
         case needsAppInstall = "needs_app_install"
+        case installUrl = "install_url"
     }
 }
 
@@ -109,14 +149,19 @@ struct GateReposResponse: Codable {
 
 // MARK: - GitHub
 
-struct GitHubOAuthStart: Codable {
-    let authorizationUrl: String
-    let state: String
+struct GitHubOrg: Codable, Identifiable {
+    let id: Int
+    let login: String
+    let avatarUrl: String
 
     enum CodingKeys: String, CodingKey {
-        case authorizationUrl = "authorization_url"
-        case state
+        case id, login
+        case avatarUrl = "avatar_url"
     }
+}
+
+struct GitHubOrgsResponse: Codable {
+    let orgs: [GitHubOrg]
 }
 
 struct GitHubStatus: Codable {

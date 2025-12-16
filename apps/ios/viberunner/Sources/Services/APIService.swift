@@ -30,7 +30,11 @@ class APIService: ObservableObject {
             throw APIError.notAuthenticated
         }
 
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        // Use URL(string:relativeTo:) to preserve query strings (appendingPathComponent encodes ? as %3F)
+        guard let url = URL(string: path, relativeTo: baseURL) else {
+            throw APIError.invalidResponse
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -76,10 +80,20 @@ class APIService: ObservableObject {
 
     // MARK: - Workout
 
-    func startWorkout(source: String = "watch") async throws -> WorkoutSession {
-        let body = try JSONEncoder().encode(["source": source])
-        let data = try await makeRequest(path: "api/workout/start", method: "POST", body: body)
-        return try decode(WorkoutSession.self, from: data)
+    func fetchSelectableRepos() async throws -> (repos: [SelectableRepo], deletedCount: Int) {
+        let data = try await makeRequest(path: "api/gate-repos/selectable")
+        let response = try decode(SelectableReposResponse.self, from: data)
+        return (response.repos, response.deletedCount ?? 0)
+    }
+
+    func startWorkout(source: String = "watch", repoIds: [String]? = nil) async throws -> WorkoutSession {
+        var body: [String: Any] = ["source": source]
+        if let repoIds = repoIds, !repoIds.isEmpty {
+            body["repo_ids"] = repoIds
+        }
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let responseData = try await makeRequest(path: "api/workout/start", method: "POST", body: data)
+        return try decode(WorkoutSession.self, from: responseData)
     }
 
     func stopWorkout() async throws {
@@ -140,17 +154,10 @@ class APIService: ObservableObject {
 
     // MARK: - GitHub
 
-    func startGitHubConnect() async throws -> GitHubOAuthStart {
-        let data = try await makeRequest(path: "api/github/connect")
-        return try decode(GitHubOAuthStart.self, from: data)
-    }
-
-    func completeGitHubConnect(code: String, state: String) async throws {
-        let body = try JSONEncoder().encode(["code": code, "state": state])
-        _ = try await makeRequest(path: "api/github/callback", method: "POST", body: body)
-
-        // Refresh status
-        _ = try await fetchGitHubStatus()
+    /// Sync GitHub provider token from Supabase OAuth to backend
+    func syncGitHubToken(providerToken: String) async throws {
+        let body = try JSONEncoder().encode(["provider_token": providerToken])
+        _ = try await makeRequest(path: "api/github/sync-token", method: "POST", body: body)
     }
 
     func fetchGitHubStatus() async throws -> GitHubStatus {
@@ -158,6 +165,12 @@ class APIService: ObservableObject {
         let status = try decode(GitHubStatus.self, from: data)
         self.githubStatus = status
         return status
+    }
+
+    func fetchOrganizations() async throws -> [GitHubOrg] {
+        let data = try await makeRequest(path: "api/github/orgs")
+        let response = try decode(GitHubOrgsResponse.self, from: data)
+        return response.orgs
     }
 
     func disconnectGitHub() async throws {
@@ -174,19 +187,88 @@ class APIService: ObservableObject {
         return response.repos
     }
 
-    func createGateRepo(name: String, description: String? = nil, isPrivate: Bool = true) async throws -> CreateGateRepoResponse {
-        var params: [String: Any] = ["name": name, "private": isPrivate]
-        if let description = description {
-            params["description"] = description
+    struct CreateGateRepoParams {
+        var name: String
+        var description: String?
+        var isPrivate: Bool = true
+        var org: String?
+
+        // Repository features
+        var hasIssues: Bool?
+        var hasWiki: Bool?
+        var hasProjects: Bool?
+
+        // Templates
+        var licenseTemplate: String?
+        var gitignoreTemplate: String?
+
+        // Merge settings
+        var allowSquashMerge: Bool?
+        var allowMergeCommit: Bool?
+        var allowRebaseMerge: Bool?
+        var deleteBranchOnMerge: Bool?
+
+        // Auto-install GitHub App
+        var autoInstallApp: Bool = true
+    }
+
+    func createGateRepo(params: CreateGateRepoParams) async throws -> CreateGateRepoResponse {
+        var body: [String: Any] = [
+            "name": params.name,
+            "private": params.isPrivate,
+            "auto_install_app": params.autoInstallApp
+        ]
+
+        if let description = params.description {
+            body["description"] = description
         }
-        let body = try JSONSerialization.data(withJSONObject: params)
-        let data = try await makeRequest(path: "api/gate-repos", method: "POST", body: body)
-        let response = try decode(CreateGateRepoResponse.self, from: data)
+        if let org = params.org {
+            body["org"] = org
+        }
+        if let hasIssues = params.hasIssues {
+            body["has_issues"] = hasIssues
+        }
+        if let hasWiki = params.hasWiki {
+            body["has_wiki"] = hasWiki
+        }
+        if let hasProjects = params.hasProjects {
+            body["has_projects"] = hasProjects
+        }
+        if let license = params.licenseTemplate {
+            body["license_template"] = license
+        }
+        if let gitignore = params.gitignoreTemplate {
+            body["gitignore_template"] = gitignore
+        }
+        if let allowSquash = params.allowSquashMerge {
+            body["allow_squash_merge"] = allowSquash
+        }
+        if let allowMerge = params.allowMergeCommit {
+            body["allow_merge_commit"] = allowMerge
+        }
+        if let allowRebase = params.allowRebaseMerge {
+            body["allow_rebase_merge"] = allowRebase
+        }
+        if let deleteBranch = params.deleteBranchOnMerge {
+            body["delete_branch_on_merge"] = deleteBranch
+        }
+
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let responseData = try await makeRequest(path: "api/gate-repos", method: "POST", body: data)
+        let response = try decode(CreateGateRepoResponse.self, from: responseData)
 
         // Refresh repos list
         _ = try await fetchGateRepos()
 
         return response
+    }
+
+    // Convenience method for simple repo creation (backwards compatibility)
+    func createGateRepo(name: String, description: String? = nil, isPrivate: Bool = true) async throws -> CreateGateRepoResponse {
+        var params = CreateGateRepoParams(name: name)
+        params.description = description
+        params.isPrivate = isPrivate
+        return try await createGateRepo(params: params)
     }
 
     func deleteGateRepo(id: String) async throws {

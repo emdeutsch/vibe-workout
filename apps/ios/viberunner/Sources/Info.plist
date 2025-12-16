@@ -16,10 +16,14 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
@@ -51,6 +55,21 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>viberunner needs to record workout sessions to track your heart rate for tool gating.</string>
 
+	<!-- Local Network Permission (for local development) -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>viberunner needs to connect to your local development server for testing.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
+
+	<!-- App Transport Security (allow HTTP for local development) -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+
 	<!-- API Configuration (from xcconfig) -->
 	<key>API_BASE_URL</key>
 	<string>$(API_BASE_URL)</string>
@@ -58,6 +77,12 @@
 	<string>$(SUPABASE_URL)</string>
 	<key>SUPABASE_ANON_KEY</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
+
+	<!-- Query schemes (to detect if GitHub app is installed) -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>github</string>
+	</array>
 
 	<!-- URL Schemes for OAuth -->
 	<key>CFBundleURLTypes</key>

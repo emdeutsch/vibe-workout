@@ -64,11 +64,22 @@ targets:
     settings:
       base:
         INFOPLIST_FILE: ../../watch/viberunner-watch/Sources/Info.plist
-        PRODUCT_BUNDLE_IDENTIFIER: com.viberunner.app.local.watchkitapp
-        PRODUCT_NAME: viberunner Watch
         TARGETED_DEVICE_FAMILY: "4"
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
-        COMPANION_APP_BUNDLE_IDENTIFIER: com.viberunner.app.local
+        PRODUCT_NAME: viberunner-watch
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.viberunner.app.watchkitapp
+          COMPANION_APP_BUNDLE_IDENTIFIER: com.viberunner.app
+        Debug (Local):
+          PRODUCT_BUNDLE_IDENTIFIER: com.viberunner.app.local.watchkitapp
+          COMPANION_APP_BUNDLE_IDENTIFIER: com.viberunner.app.local
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.viberunner.app.watchkitapp
+          COMPANION_APP_BUNDLE_IDENTIFIER: com.viberunner.app
+        Release (Local):
+          PRODUCT_BUNDLE_IDENTIFIER: com.viberunner.app.local.watchkitapp
+          COMPANION_APP_BUNDLE_IDENTIFIER: com.viberunner.app.local
     entitlements:
       path: ../../watch/viberunner-watch/Sources/viberunner-watch.entitlements
       properties:

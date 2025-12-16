@@ -39,17 +39,18 @@ async function processUser(userId: string, sessionId: string): Promise<void> {
   const hrAgeSeconds = (now - hrStatus.updatedAt.getTime()) / 1000;
   const isStale = hrAgeSeconds > config.hrStaleThresholdSeconds;
 
-  // Get user's active gate repos with GitHub App installed
+  // Get gate repos selected for this workout session
   const gateRepos = await prisma.gateRepo.findMany({
     where: {
       userId,
       active: true,
+      activeSessionId: sessionId, // Only repos selected for this session
       githubAppInstallationId: { not: null },
     },
   });
 
   if (gateRepos.length === 0) {
-    return; // No active gate repos
+    return; // No repos selected for this session
   }
 
   // Create signed payload with session ID for commit tagging

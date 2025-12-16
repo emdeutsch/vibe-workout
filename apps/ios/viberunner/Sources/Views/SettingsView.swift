@@ -8,8 +8,6 @@ struct SettingsView: View {
     @State private var threshold: Double = Double(Config.defaultHRThreshold)
     @State private var isUpdatingThreshold = false
     @State private var showingSignOutAlert = false
-    @State private var showingGitHubConnectError = false
-    @State private var gitHubError: String?
 
     var body: some View {
         NavigationStack {
@@ -89,19 +87,24 @@ struct SettingsView: View {
                             .controlSize(.small)
                         }
                     } else {
-                        Button {
-                            connectGitHub()
-                        } label: {
-                            HStack {
-                                Image(systemName: "link")
-                                Text("Connect GitHub")
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Not Connected")
+                                    .fontWeight(.medium)
+
+                                Text("Sign out and sign in with GitHub to connect")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
                 } header: {
                     Text("GitHub")
                 } footer: {
-                    Text("Connect GitHub to create and manage gate repos from this app.")
+                    Text("GitHub is connected automatically when you sign in with GitHub. This enables creating and managing gate repos.")
                 }
 
                 // Watch Section
@@ -165,11 +168,6 @@ struct SettingsView: View {
             } message: {
                 Text("Are you sure you want to sign out?")
             }
-            .alert("GitHub Connection Error", isPresented: $showingGitHubConnectError) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(gitHubError ?? "Failed to connect GitHub")
-            }
         }
     }
 
@@ -189,22 +187,6 @@ struct SettingsView: View {
                 }
             }
             isUpdatingThreshold = false
-        }
-    }
-
-    private func connectGitHub() {
-        Task {
-            do {
-                let oauthStart = try await apiService.startGitHubConnect()
-                if let url = URL(string: oauthStart.authorizationUrl) {
-                    await MainActor.run {
-                        UIApplication.shared.open(url)
-                    }
-                }
-            } catch {
-                gitHubError = error.localizedDescription
-                showingGitHubConnectError = true
-            }
         }
     }
 }

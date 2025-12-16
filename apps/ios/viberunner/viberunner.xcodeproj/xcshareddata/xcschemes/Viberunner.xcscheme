@@ -29,7 +29,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "65C33E78EAE8141B8B5DC569"
-               BuildableName = "viberunner Watch.app"
+               BuildableName = "viberunner-watch.app"
                BlueprintName = "viberunner-watch"
                ReferencedContainer = "container:viberunner.xcodeproj">
             </BuildableReference>

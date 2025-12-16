@@ -57,5 +57,9 @@ echo -e "${GREEN}✓${NC} services/worker/.env"
 echo "$SECRETS" > "$PROJECT_ROOT/packages/db/.env"
 echo -e "${GREEN}✓${NC} packages/db/.env"
 
+# Write Supabase-specific secrets (for local Supabase config.toml env() references)
+echo "$SECRETS" | grep -E "^SUPABASE_" > "$PROJECT_ROOT/supabase/.env"
+echo -e "${GREEN}✓${NC} supabase/.env"
+
 echo ""
 echo -e "${GREEN}Secrets pulled successfully!${NC}"

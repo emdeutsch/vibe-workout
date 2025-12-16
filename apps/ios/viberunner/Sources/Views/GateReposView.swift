@@ -1,4 +1,30 @@
 import SwiftUI
+import SafariServices
+import os.log
+
+private let logger = Logger(subsystem: "com.viberunner.app", category: "GateReposView")
+
+// MARK: - URL Identifiable Extension
+
+extension URL: @retroactive Identifiable {
+    public var id: String { absoluteString }
+}
+
+// MARK: - Safari View Controller Wrapper
+
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let config = SFSafariViewController.Configuration()
+        config.entersReaderIfAvailable = false
+        let safari = SFSafariViewController(url: url, configuration: config)
+        safari.preferredControlTintColor = .systemBlue
+        return safari
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
+}
 
 struct GateReposView: View {
     @EnvironmentObject var apiService: APIService
@@ -125,13 +151,14 @@ struct EmptyReposView: View {
                 }
             } else {
                 VStack(spacing: 12) {
-                    Text("Connect GitHub to create repos")
+                    Text("Sign in with GitHub to create repos")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    NavigationLink("Go to Settings") {
-                        SettingsView()
-                    }
+                    Text("Go to Settings → Sign Out, then sign back in with GitHub")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
             }
         }
@@ -146,6 +173,7 @@ struct GateRepoRow: View {
     @EnvironmentObject var apiService: APIService
 
     @State private var showingInstallAlert = false
+    @State private var installURL: URL?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -192,7 +220,7 @@ struct GateRepoRow: View {
                     if let response = try? await apiService.getGateRepoInstallURL(id: repo.id),
                        let url = URL(string: response.installUrl) {
                         await MainActor.run {
-                            UIApplication.shared.open(url)
+                            installURL = url
                         }
                     }
                 }
@@ -200,6 +228,18 @@ struct GateRepoRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("You need to install the viberunner GitHub App on this repository to enable HR signal updates.")
+        }
+        .sheet(item: $installURL) { url in
+            SafariView(url: url)
+                .ignoresSafeArea()
+        }
+        .onChange(of: installURL) { oldValue, newValue in
+            // Refresh repos when Safari sheet closes
+            if oldValue != nil && newValue == nil {
+                Task {
+                    try? await apiService.fetchGateRepos()
+                }
+            }
         }
     }
 }
@@ -210,16 +250,74 @@ struct CreateGateRepoSheet: View {
     @EnvironmentObject var apiService: APIService
     @Environment(\.dismiss) var dismiss
 
+    // Basic settings
     @State private var name = ""
     @State private var description = ""
     @State private var isPrivate = true
+
+    // Owner (user or org)
+    @State private var selectedOwner: String? = nil
+    @State private var organizations: [GitHubOrg] = []
+    @State private var isLoadingOrgs = false  // Org support disabled for launch
+
+    // Templates
+    @State private var selectedLicense: String? = nil
+    @State private var selectedGitignore: String? = nil
+
+    // Repository features
+    @State private var hasIssues = true
+    @State private var hasWiki = false      // Most projects don't use GitHub wikis
+    @State private var hasProjects = false  // Most projects use external project management
+
+    // Merge settings
+    @State private var allowSquashMerge = true
+    @State private var allowMergeCommit = true
+    @State private var allowRebaseMerge = true
+    @State private var deleteBranchOnMerge = true  // Keeps repo clean after PRs are merged
+
+    // GitHub App
+    @State private var autoInstallApp = true
+
+    // Expandable sections
+    @State private var showTemplateSettings = false
+    @State private var showFeatureSettings = false
+    @State private var showMergeSettings = false
+
+    // State
     @State private var isCreating = false
+    @State private var installURL: URL?
     @State private var error: String?
     @State private var createdRepo: CreateGateRepoResponse?
+
+    // Common license options
+    private let licenseOptions = [
+        ("None", nil as String?),
+        ("MIT License", "mit"),
+        ("Apache License 2.0", "apache-2.0"),
+        ("GNU GPLv3", "gpl-3.0"),
+        ("BSD 3-Clause", "bsd-3-clause"),
+        ("ISC License", "isc"),
+        ("Mozilla Public License 2.0", "mpl-2.0"),
+        ("The Unlicense", "unlicense"),
+    ]
+
+    // Common gitignore templates
+    private let gitignoreOptions = [
+        ("None", nil as String?),
+        ("Node", "Node"),
+        ("Swift", "Swift"),
+        ("Python", "Python"),
+        ("Go", "Go"),
+        ("Rust", "Rust"),
+        ("Java", "Java"),
+        ("C++", "C++"),
+        ("macOS", "macOS"),
+    ]
 
     var body: some View {
         NavigationStack {
             Form {
+                // Basic Section
                 Section {
                     TextField("Repository name", text: $name)
                         .autocapitalization(.none)
@@ -227,7 +325,76 @@ struct CreateGateRepoSheet: View {
 
                     TextField("Description (optional)", text: $description)
 
+                    // Owner picker - commented out for launch (requires read:org scope)
+                    // TODO: Re-enable when ready to request read:org permission
+                    /*
+                    if isLoadingOrgs {
+                        HStack {
+                            Text("Owner")
+                            Spacer()
+                            ProgressView()
+                        }
+                    } else {
+                        Picker("Owner", selection: $selectedOwner) {
+                            if let username = apiService.githubStatus?.username {
+                                Text(username).tag(nil as String?)
+                            }
+                            ForEach(organizations) { org in
+                                Text(org.login).tag(org.login as String?)
+                            }
+                        }
+                    }
+                    */
+                }
+
+                // Visibility Section
+                Section {
                     Toggle("Private repository", isOn: $isPrivate)
+                } footer: {
+                    Text("Private repositories are only visible to you and collaborators.")
+                }
+
+                // Template Section (collapsible)
+                Section {
+                    DisclosureGroup("Templates", isExpanded: $showTemplateSettings) {
+                        Picker("License", selection: $selectedLicense) {
+                            ForEach(licenseOptions, id: \.1) { option in
+                                Text(option.0).tag(option.1)
+                            }
+                        }
+
+                        Picker(".gitignore", selection: $selectedGitignore) {
+                            ForEach(gitignoreOptions, id: \.1) { option in
+                                Text(option.0).tag(option.1)
+                            }
+                        }
+                    }
+                }
+
+                // Features Section (collapsible)
+                Section {
+                    DisclosureGroup("Features", isExpanded: $showFeatureSettings) {
+                        Toggle("Issues", isOn: $hasIssues)
+                        Toggle("Wiki", isOn: $hasWiki)
+                        Toggle("Projects", isOn: $hasProjects)
+                    }
+                }
+
+                // Merge Settings Section (collapsible)
+                Section {
+                    DisclosureGroup("Merge Settings", isExpanded: $showMergeSettings) {
+                        Toggle("Allow squash merging", isOn: $allowSquashMerge)
+                        Toggle("Allow merge commits", isOn: $allowMergeCommit)
+                        Toggle("Allow rebase merging", isOn: $allowRebaseMerge)
+                        Toggle("Delete branch on merge", isOn: $deleteBranchOnMerge)
+                    }
+                }
+
+                // GitHub App Section
+                Section {
+                    Toggle("Install viberunner app after creation", isOn: $autoInstallApp)
+                } footer: {
+                    Text("The viberunner GitHub App is required to update HR signals in your repository.")
                 }
 
                 if let error = error {
@@ -247,7 +414,7 @@ struct CreateGateRepoSheet: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            if repo.needsAppInstall {
+                            if repo.needsAppInstall && repo.installUrl == nil {
                                 Text("Install the viberunner GitHub App to enable HR gating.")
                                     .font(.caption)
                                     .foregroundStyle(.orange)
@@ -288,7 +455,38 @@ struct CreateGateRepoSheet: View {
                         .background(.ultraThinMaterial)
                 }
             }
+            // .task {
+            //     await loadOrganizations()
+            // }
+            .sheet(item: $installURL) { url in
+                SafariView(url: url)
+                    .ignoresSafeArea()
+            }
+            .onChange(of: installURL) { oldValue, newValue in
+                // Auto-dismiss and refresh when Safari closes after repo creation
+                if oldValue != nil && newValue == nil && createdRepo != nil {
+                    Task {
+                        try? await apiService.fetchGateRepos()
+                    }
+                    dismiss()
+                }
+            }
         }
+    }
+
+    private func loadOrganizations() async {
+        isLoadingOrgs = true
+        logger.info("Loading organizations...")
+        do {
+            organizations = try await apiService.fetchOrganizations()
+            logger.info("Loaded \(self.organizations.count) organizations")
+            for org in organizations {
+                logger.debug("Org: \(org.login)")
+            }
+        } catch {
+            logger.error("Failed to load organizations: \(error.localizedDescription)")
+        }
+        isLoadingOrgs = false
     }
 
     private func createRepo() async {
@@ -296,12 +494,29 @@ struct CreateGateRepoSheet: View {
         error = nil
 
         do {
-            let repo = try await apiService.createGateRepo(
-                name: name,
-                description: description.isEmpty ? nil : description,
-                isPrivate: isPrivate
-            )
+            var params = APIService.CreateGateRepoParams(name: name)
+            params.description = description.isEmpty ? nil : description
+            params.isPrivate = isPrivate
+            params.org = selectedOwner
+            params.hasIssues = hasIssues
+            params.hasWiki = hasWiki
+            params.hasProjects = hasProjects
+            params.licenseTemplate = selectedLicense
+            params.gitignoreTemplate = selectedGitignore
+            params.allowSquashMerge = allowSquashMerge
+            params.allowMergeCommit = allowMergeCommit
+            params.allowRebaseMerge = allowRebaseMerge
+            params.deleteBranchOnMerge = deleteBranchOnMerge
+            params.autoInstallApp = autoInstallApp
+
+            let repo = try await apiService.createGateRepo(params: params)
             createdRepo = repo
+
+            // Auto-open GitHub App installation if URL is provided
+            if let installUrlString = repo.installUrl,
+               let url = URL(string: installUrlString) {
+                installURL = url
+            }
         } catch {
             self.error = error.localizedDescription
         }
