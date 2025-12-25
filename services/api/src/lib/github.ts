@@ -353,21 +353,42 @@ export async function updateSignalRef(
     parents: [],
   });
 
-  // Always delete then create - simple and reliable
+  // Use updateRef (idempotent, handles concurrent requests)
+  // Only createRef if ref doesn't exist (404)
   const shortRef = refName.replace('refs/', '');
 
-  // Delete existing ref (ignore errors - might not exist)
   try {
-    await octokit.rest.git.deleteRef({ owner, repo, ref: shortRef });
-  } catch {
-    // Ignore - ref might not exist
+    await octokit.rest.git.updateRef({
+      owner,
+      repo,
+      ref: shortRef,
+      sha: commit.sha,
+      force: true,
+    });
+  } catch (e: unknown) {
+    if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 404) {
+      // Ref doesn't exist yet, create it
+      try {
+        await octokit.rest.git.createRef({
+          owner,
+          repo,
+          ref: refName,
+          sha: commit.sha,
+        });
+      } catch (createErr: unknown) {
+        // If create fails with 422 (race: another request created it), that's fine - ignore
+        if (
+          createErr &&
+          typeof createErr === 'object' &&
+          'status' in createErr &&
+          (createErr as { status: number }).status === 422
+        ) {
+          return; // Another request won the race, signal is updated
+        }
+        throw createErr;
+      }
+    } else {
+      throw e;
+    }
   }
-
-  // Create fresh ref
-  await octokit.rest.git.createRef({
-    owner,
-    repo,
-    ref: refName,
-    sha: commit.sha,
-  });
 }
