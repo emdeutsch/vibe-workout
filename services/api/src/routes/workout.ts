@@ -107,10 +107,12 @@ workout.post('/stop', async (c) => {
     data: { activeSessionId: null },
   });
 
+  const endedAt = new Date();
+
   // End sessions
   const result = await prisma.workoutSession.updateMany({
     where: { userId, active: true },
-    data: { active: false, endedAt: new Date() },
+    data: { active: false, endedAt },
   });
 
   // Expire HR status
@@ -122,7 +124,81 @@ workout.post('/stop', async (c) => {
     },
   });
 
-  return c.json({ stopped: true, sessions_ended: result.count });
+  // Generate WorkoutSummary for each ended session
+  const profile = await prisma.profile.findUnique({
+    where: { userId },
+  });
+  const threshold = profile?.hrThresholdBpm ?? config.defaultHrThreshold;
+
+  for (const session of activeSessions) {
+    // Check if summary already exists
+    const existingSummary = await prisma.workoutSummary.findUnique({
+      where: { sessionId: session.id },
+    });
+
+    if (existingSummary) continue;
+
+    // Get all HR samples for this session
+    const samples = await prisma.hrSample.findMany({
+      where: { sessionId: session.id },
+      orderBy: { ts: 'asc' },
+    });
+
+    if (samples.length === 0) {
+      // Create summary with zero values if no samples
+      await prisma.workoutSummary.create({
+        data: {
+          sessionId: session.id,
+          durationSecs: 0,
+          avgBpm: 0,
+          maxBpm: 0,
+          minBpm: 0,
+          timeAboveThresholdSecs: 0,
+          timeBelowThresholdSecs: 0,
+          thresholdBpm: threshold,
+          totalSamples: 0,
+        },
+      });
+      continue;
+    }
+
+    const bpms = samples.map((s) => s.bpm);
+    const startTs = samples[0].ts.getTime();
+    const endTs = samples[samples.length - 1].ts.getTime();
+    const durationSecs = Math.round((endTs - startTs) / 1000);
+
+    // Calculate time above/below threshold
+    let timeAbove = 0;
+    let timeBelow = 0;
+    for (let i = 1; i < samples.length; i++) {
+      const interval = (samples[i].ts.getTime() - samples[i - 1].ts.getTime()) / 1000;
+      if (samples[i].bpm >= threshold) {
+        timeAbove += interval;
+      } else {
+        timeBelow += interval;
+      }
+    }
+
+    await prisma.workoutSummary.create({
+      data: {
+        sessionId: session.id,
+        durationSecs,
+        avgBpm: Math.round(bpms.reduce((a, b) => a + b, 0) / bpms.length),
+        maxBpm: Math.max(...bpms),
+        minBpm: Math.min(...bpms),
+        timeAboveThresholdSecs: Math.round(timeAbove),
+        timeBelowThresholdSecs: Math.round(timeBelow),
+        thresholdBpm: threshold,
+        totalSamples: samples.length,
+      },
+    });
+  }
+
+  return c.json({
+    stopped: true,
+    sessions_ended: result.count,
+    session_ids: activeSessions.map((s) => s.id),
+  });
 });
 
 // Get active workout session
@@ -291,7 +367,14 @@ workout.get('/sessions', async (c) => {
     ...(cursor && { cursor: { id: cursor }, skip: 1 }),
     include: {
       summary: true,
-      _count: { select: { commits: true } },
+      commits: {
+        select: {
+          repoOwner: true,
+          repoName: true,
+          linesAdded: true,
+          linesRemoved: true,
+        },
+      },
     },
   });
 
@@ -299,27 +382,82 @@ workout.get('/sessions', async (c) => {
   const items = hasMore ? sessions.slice(0, -1) : sessions;
   const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
 
+  // Fetch sparkline data for each session (sampled BPMs)
+  const sessionIds = items.map((s) => s.id);
+  const sparklineData = await Promise.all(
+    sessionIds.map(async (sessionId) => {
+      const samples = await prisma.hrSample.findMany({
+        where: { sessionId },
+        orderBy: { ts: 'asc' },
+        select: { bpm: true },
+      });
+
+      // Downsample to ~20 points for sparkline
+      if (samples.length <= 20) {
+        return { sessionId, bpms: samples.map((s) => s.bpm) };
+      }
+
+      const step = Math.floor(samples.length / 20);
+      const sampled: number[] = [];
+      for (let i = 0; i < samples.length; i += step) {
+        sampled.push(samples[i].bpm);
+        if (sampled.length >= 20) break;
+      }
+      return { sessionId, bpms: sampled };
+    })
+  );
+
+  const sparklineMap = new Map(sparklineData.map((s) => [s.sessionId, s.bpms]));
+
   return c.json({
-    sessions: items.map((s) => ({
-      id: s.id,
-      started_at: s.startedAt.toISOString(),
-      ended_at: s.endedAt?.toISOString() ?? null,
-      active: s.active,
-      source: s.source,
-      summary: s.summary
-        ? {
-            duration_secs: s.summary.durationSecs,
-            avg_bpm: s.summary.avgBpm,
-            max_bpm: s.summary.maxBpm,
-            min_bpm: s.summary.minBpm,
-            time_above_threshold_secs: s.summary.timeAboveThresholdSecs,
-            time_below_threshold_secs: s.summary.timeBelowThresholdSecs,
-            threshold_bpm: s.summary.thresholdBpm,
-            total_samples: s.summary.totalSamples,
-          }
-        : null,
-      commit_count: s._count.commits,
-    })),
+    sessions: items.map((s) => {
+      // Aggregate commit stats
+      const totalLinesAdded = s.commits.reduce((sum, c) => sum + (c.linesAdded ?? 0), 0);
+      const totalLinesRemoved = s.commits.reduce((sum, c) => sum + (c.linesRemoved ?? 0), 0);
+
+      // Get unique repo names and find top repo
+      const repoCommitCounts = new Map<string, number>();
+      for (const commit of s.commits) {
+        const key = `${commit.repoOwner}/${commit.repoName}`;
+        repoCommitCounts.set(key, (repoCommitCounts.get(key) ?? 0) + 1);
+      }
+
+      const repoNames = Array.from(repoCommitCounts.keys());
+      let topRepo: string | null = null;
+      let maxCommits = 0;
+      for (const [repo, count] of repoCommitCounts) {
+        if (count > maxCommits) {
+          maxCommits = count;
+          topRepo = repo;
+        }
+      }
+
+      return {
+        id: s.id,
+        started_at: s.startedAt.toISOString(),
+        ended_at: s.endedAt?.toISOString() ?? null,
+        active: s.active,
+        source: s.source,
+        summary: s.summary
+          ? {
+              duration_secs: s.summary.durationSecs,
+              avg_bpm: s.summary.avgBpm,
+              max_bpm: s.summary.maxBpm,
+              min_bpm: s.summary.minBpm,
+              time_above_threshold_secs: s.summary.timeAboveThresholdSecs,
+              time_below_threshold_secs: s.summary.timeBelowThresholdSecs,
+              threshold_bpm: s.summary.thresholdBpm,
+              total_samples: s.summary.totalSamples,
+            }
+          : null,
+        commit_count: s.commits.length,
+        total_lines_added: totalLinesAdded,
+        total_lines_removed: totalLinesRemoved,
+        top_repo: topRepo,
+        repo_names: repoNames,
+        sparkline_bpms: sparklineMap.get(s.id) ?? null,
+      };
+    }),
     next_cursor: nextCursor,
     has_more: hasMore,
   });
@@ -436,6 +574,154 @@ workout.get('/sessions/:sessionId/buckets', async (c) => {
       threshold_bpm: b.thresholdBpm,
     })),
   });
+});
+
+// Get post-workout summary with repo breakdown
+workout.get('/sessions/:sessionId/post-summary', async (c) => {
+  const userId = c.get('userId');
+  const sessionId = c.req.param('sessionId');
+
+  const session = await prisma.workoutSession.findFirst({
+    where: { id: sessionId, userId },
+    include: {
+      summary: true,
+      commits: {
+        orderBy: { committedAt: 'desc' },
+      },
+    },
+  });
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  // Aggregate commits by repo
+  const repoMap = new Map<
+    string,
+    {
+      owner: string;
+      name: string;
+      commitCount: number;
+      linesAdded: number;
+      linesRemoved: number;
+      firstCommitAt: Date | null;
+      lastCommitAt: Date | null;
+    }
+  >();
+
+  for (const commit of session.commits) {
+    const key = `${commit.repoOwner}/${commit.repoName}`;
+    const existing = repoMap.get(key);
+
+    if (existing) {
+      existing.commitCount++;
+      existing.linesAdded += commit.linesAdded ?? 0;
+      existing.linesRemoved += commit.linesRemoved ?? 0;
+      if (!existing.firstCommitAt || commit.committedAt < existing.firstCommitAt) {
+        existing.firstCommitAt = commit.committedAt;
+      }
+      if (!existing.lastCommitAt || commit.committedAt > existing.lastCommitAt) {
+        existing.lastCommitAt = commit.committedAt;
+      }
+    } else {
+      repoMap.set(key, {
+        owner: commit.repoOwner,
+        name: commit.repoName,
+        commitCount: 1,
+        linesAdded: commit.linesAdded ?? 0,
+        linesRemoved: commit.linesRemoved ?? 0,
+        firstCommitAt: commit.committedAt,
+        lastCommitAt: commit.committedAt,
+      });
+    }
+  }
+
+  const repoBreakdown = Array.from(repoMap.values()).sort((a, b) => b.commitCount - a.commitCount);
+
+  const totalLinesAdded = session.commits.reduce((sum, c) => sum + (c.linesAdded ?? 0), 0);
+  const totalLinesRemoved = session.commits.reduce((sum, c) => sum + (c.linesRemoved ?? 0), 0);
+
+  return c.json({
+    session: {
+      id: session.id,
+      started_at: session.startedAt.toISOString(),
+      ended_at: session.endedAt?.toISOString() ?? null,
+      active: session.active,
+      source: session.source,
+      summary: session.summary
+        ? {
+            duration_secs: session.summary.durationSecs,
+            avg_bpm: session.summary.avgBpm,
+            max_bpm: session.summary.maxBpm,
+            min_bpm: session.summary.minBpm,
+            time_above_threshold_secs: session.summary.timeAboveThresholdSecs,
+            time_below_threshold_secs: session.summary.timeBelowThresholdSecs,
+            threshold_bpm: session.summary.thresholdBpm,
+            total_samples: session.summary.totalSamples,
+          }
+        : null,
+      commits: session.commits.map((c) => ({
+        id: c.id,
+        repo_owner: c.repoOwner,
+        repo_name: c.repoName,
+        commit_sha: c.commitSha,
+        commit_msg: c.commitMsg,
+        lines_added: c.linesAdded,
+        lines_removed: c.linesRemoved,
+        committed_at: c.committedAt.toISOString(),
+      })),
+    },
+    repo_breakdown: repoBreakdown.map((r) => ({
+      owner: r.owner,
+      name: r.name,
+      commit_count: r.commitCount,
+      lines_added: r.linesAdded,
+      lines_removed: r.linesRemoved,
+      first_commit_at: r.firstCommitAt?.toISOString() ?? null,
+      last_commit_at: r.lastCommitAt?.toISOString() ?? null,
+    })),
+    total_lines_added: totalLinesAdded,
+    total_lines_removed: totalLinesRemoved,
+    total_commits: session.commits.length,
+  });
+});
+
+// Discard a workout session (delete within time window)
+workout.delete('/sessions/:sessionId', async (c) => {
+  const userId = c.get('userId');
+  const sessionId = c.req.param('sessionId');
+
+  const session = await prisma.workoutSession.findFirst({
+    where: { id: sessionId, userId },
+    select: { id: true, endedAt: true, active: true },
+  });
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  // Only allow discard if session ended within last 5 minutes or is still active
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  if (session.endedAt && session.endedAt < fiveMinutesAgo && !session.active) {
+    return c.json({ error: 'Session can only be discarded within 5 minutes of ending' }, 400);
+  }
+
+  // Delete all related data in order (respecting foreign keys)
+  await prisma.sessionCommit.deleteMany({ where: { sessionId } });
+  await prisma.hrBucket.deleteMany({ where: { sessionId } });
+  await prisma.workoutSummary.deleteMany({ where: { sessionId } });
+  await prisma.hrSample.deleteMany({ where: { sessionId } });
+
+  // Clear activeSessionId from any repos
+  await prisma.gateRepo.updateMany({
+    where: { activeSessionId: sessionId },
+    data: { activeSessionId: null },
+  });
+
+  // Delete the session itself
+  await prisma.workoutSession.delete({ where: { id: sessionId } });
+
+  return c.json({ deleted: true });
 });
 
 // Link a commit to a session (called by webhook or manually)

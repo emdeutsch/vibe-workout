@@ -33,7 +33,8 @@ struct WorkoutDetailView: View {
                     chartSection
 
                     if !session.commits.isEmpty {
-                        commitsSection(session.commits)
+                        codingStatsSection(session.commits)
+                        groupedCommitsSection(session.commits)
                     }
                 }
                 .padding()
@@ -143,16 +144,71 @@ struct WorkoutDetailView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private func commitsSection(_ commits: [SessionCommit]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func codingStatsSection(_ commits: [SessionCommit]) -> some View {
+        let totalAdded = commits.compactMap { $0.linesAdded }.reduce(0, +)
+        let totalRemoved = commits.compactMap { $0.linesRemoved }.reduce(0, +)
+        let repoCount = Set(commits.map { "\($0.repoOwner)/\($0.repoName)" }).count
+
+        return VStack(spacing: Spacing.md) {
             HStack {
-                Image(systemName: "arrow.triangle.branch")
-                Text("Commits (\(commits.count))")
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .foregroundStyle(.blue)
+                Text("Coding Activity")
                     .font(.headline)
+                Spacer()
             }
 
-            ForEach(commits) { commit in
-                CommitRowView(commit: commit)
+            HStack(spacing: Spacing.xl) {
+                VStack(spacing: Spacing.xs) {
+                    Text("+\(totalAdded)")
+                        .font(.title3.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.green)
+                    Text("Added")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(spacing: Spacing.xs) {
+                    Text("-\(totalRemoved)")
+                        .font(.title3.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.red)
+                    Text("Removed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                VStack(spacing: Spacing.xs) {
+                    Text("\(commits.count)")
+                        .font(.title3.weight(.bold).monospacedDigit())
+                    Text("Commits")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text("\(repoCount) \(repoCount == 1 ? "repository" : "repositories")")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func groupedCommitsSection(_ commits: [SessionCommit]) -> some View {
+        let grouped = Dictionary(grouping: commits) { "\($0.repoOwner)/\($0.repoName)" }
+        let sortedKeys = grouped.keys.sorted()
+
+        return VStack(alignment: .leading, spacing: Spacing.md) {
+            Text("Commits by Repository")
+                .font(.headline)
+
+            ForEach(sortedKeys, id: \.self) { repoKey in
+                RepoCommitGroup(
+                    repoName: repoKey,
+                    commits: grouped[repoKey] ?? []
+                )
             }
         }
         .padding()
@@ -256,60 +312,6 @@ struct ThresholdBar: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-    }
-}
-
-// MARK: - Commit Row
-
-struct CommitRowView: View {
-    let commit: SessionCommit
-
-    private let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        return f
-    }()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(commit.repoOwner + "/" + commit.repoName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                if let date = commit.commitDate {
-                    Text(timeFormatter.string(from: date))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HStack(spacing: 8) {
-                Text(commit.shortSha)
-                    .font(.caption)
-                    .fontDesign(.monospaced)
-                    .foregroundStyle(.blue)
-
-                Text(commit.commitMsg)
-                    .font(.subheadline)
-                    .lineLimit(2)
-            }
-
-            if let added = commit.linesAdded, let removed = commit.linesRemoved {
-                HStack(spacing: 12) {
-                    Label("+\(added)", systemImage: "plus")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-
-                    Label("-\(removed)", systemImage: "minus")
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                }
-            }
-        }
-        .padding(.vertical, 8)
     }
 }
 

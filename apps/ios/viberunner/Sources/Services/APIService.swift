@@ -96,8 +96,9 @@ class APIService: ObservableObject {
         return try decode(WorkoutSession.self, from: responseData)
     }
 
-    func stopWorkout() async throws {
-        _ = try await makeRequest(path: "api/workout/stop", method: "POST")
+    func stopWorkout() async throws -> StopWorkoutResponse {
+        let data = try await makeRequest(path: "api/workout/stop", method: "POST")
+        return try decode(StopWorkoutResponse.self, from: data)
     }
 
     func getActiveWorkout() async throws -> ActiveWorkout {
@@ -150,6 +151,15 @@ class APIService: ObservableObject {
         let data = try await makeRequest(path: "api/workout/sessions/\(sessionId)/buckets")
         let response = try decode(HRBucketsResponse.self, from: data)
         return response.buckets
+    }
+
+    func fetchPostWorkoutSummary(sessionId: String) async throws -> PostWorkoutSummary {
+        let data = try await makeRequest(path: "api/workout/sessions/\(sessionId)/post-summary")
+        return try decode(PostWorkoutSummary.self, from: data)
+    }
+
+    func discardWorkout(sessionId: String) async throws {
+        _ = try await makeRequest(path: "api/workout/sessions/\(sessionId)", method: "DELETE")
     }
 
     // MARK: - GitHub
@@ -289,14 +299,6 @@ class APIService: ObservableObject {
     func getGateRepoInstallURL(id: String) async throws -> InstallUrlResponse {
         let data = try await makeRequest(path: "api/gate-repos/\(id)/install-url")
         return try decode(InstallUrlResponse.self, from: data)
-    }
-
-    /// Sync installation status for a repo by checking GitHub API
-    /// Useful for local dev where webhooks can't reach localhost
-    func syncGateRepoInstallation(id: String) async throws {
-        _ = try await makeRequest(path: "api/gate-repos/\(id)/sync-installation", method: "POST")
-        // Refresh repos list to get updated status
-        _ = try await fetchGateRepos()
     }
 }
 

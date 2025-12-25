@@ -44,33 +44,39 @@ struct HistoryView: View {
     }
 
     private var sessionsList: some View {
-        List {
-            ForEach(sessions) { session in
-                NavigationLink(destination: WorkoutDetailView(sessionId: session.id)) {
-                    SessionRowView(session: session)
+        ScrollView {
+            LazyVStack(spacing: Spacing.md) {
+                ForEach(sessions) { session in
+                    NavigationLink(destination: WorkoutDetailView(sessionId: session.id)) {
+                        WorkoutHistoryCard(session: session)
+                    }
+                    .buttonStyle(.plain)
                 }
-            }
 
-            if hasMore {
-                Button {
-                    Task {
-                        await loadMore()
-                    }
-                } label: {
-                    HStack {
-                        Spacer()
-                        if isLoading {
-                            ProgressView()
-                        } else {
-                            Text("Load More")
+                if hasMore {
+                    Button {
+                        Task {
+                            await loadMore()
                         }
-                        Spacer()
+                    } label: {
+                        HStack {
+                            Spacer()
+                            if isLoading {
+                                ProgressView()
+                            } else {
+                                Text("Load More")
+                                    .font(.subheadline)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, Spacing.md)
                     }
+                    .disabled(isLoading)
                 }
-                .disabled(isLoading)
             }
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
         }
-        .listStyle(.insetGrouped)
     }
 
     private func loadSessions(refresh: Bool = false) async {

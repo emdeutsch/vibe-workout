@@ -26,14 +26,8 @@ import type {
 
 const gateRepos = new Hono();
 
-// Apply auth to all routes except webhooks
-gateRepos.use('*', async (c, next) => {
-  // Skip auth for webhook endpoints
-  if (c.req.path.includes('/webhook/')) {
-    return next();
-  }
-  return authMiddleware(c, next);
-});
+// Apply auth to all routes
+gateRepos.use('*', authMiddleware);
 
 /**
  * Generate bootstrap files for a gate repo
@@ -344,9 +338,10 @@ gateRepos.get('/', async (c) => {
     return c.json({ repos: response });
   }
 
-  // Verify each repo still exists on GitHub
+  // Verify each repo still exists on GitHub and check installation status
   const accessToken = decrypt(githubToken.encryptedAccessToken);
   const octokit = createUserOctokit(accessToken);
+  const appOctokit = createAppOctokit();
 
   const verifiedRepos: typeof repos = [];
   const deletedRepoIds: string[] = [];
@@ -358,6 +353,29 @@ gateRepos.get('/', async (c) => {
           owner: repo.owner,
           repo: repo.name,
         });
+
+        // Check installation status via GitHub App API
+        let installationId: number | null = null;
+        try {
+          const { data } = await appOctokit.rest.apps.getRepoInstallation({
+            owner: repo.owner,
+            repo: repo.name,
+          });
+          installationId = data.id;
+        } catch {
+          // 404 means not installed, which is fine
+          installationId = null;
+        }
+
+        // Update DB if installation status changed
+        if (repo.githubAppInstallationId !== installationId) {
+          await prisma.gateRepo.update({
+            where: { id: repo.id },
+            data: { githubAppInstallationId: installationId },
+          });
+          repo.githubAppInstallationId = installationId;
+        }
+
         verifiedRepos.push(repo);
       } catch (error: unknown) {
         if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
@@ -675,108 +693,6 @@ gateRepos.delete('/:id', async (c) => {
   await prisma.gateRepo.delete({ where: { id } });
 
   return c.json({ deleted: true });
-});
-
-// GitHub App installation webhook handler
-gateRepos.post('/webhook/installation', async (c) => {
-  // In production, verify webhook signature
-  const payload = await c.req.json<{
-    action: string;
-    installation: {
-      id: number;
-      account: { login: string };
-    };
-    repositories?: Array<{
-      id: number;
-      name: string;
-      full_name: string;
-    }>;
-  }>();
-
-  if (payload.action === 'created' || payload.action === 'added') {
-    const installationId = payload.installation.id;
-    const owner = payload.installation.account.login;
-
-    // Update gate repos with this installation
-    if (payload.repositories) {
-      for (const repo of payload.repositories) {
-        await prisma.gateRepo.updateMany({
-          where: {
-            owner,
-            name: repo.name,
-          },
-          data: {
-            githubAppInstallationId: installationId,
-          },
-        });
-      }
-    }
-  } else if (payload.action === 'removed' || payload.action === 'deleted') {
-    // Clear installation ID from affected repos
-    await prisma.gateRepo.updateMany({
-      where: {
-        githubAppInstallationId: payload.installation.id,
-      },
-      data: {
-        githubAppInstallationId: null,
-      },
-    });
-  }
-
-  return c.json({ received: true });
-});
-
-// Sync installation status by checking GitHub API
-// Useful for local dev where webhooks can't reach localhost
-gateRepos.post('/:id/sync-installation', async (c) => {
-  const userId = c.get('userId');
-  const id = c.req.param('id');
-
-  const repo = await prisma.gateRepo.findFirst({ where: { id, userId } });
-
-  if (!repo) {
-    return c.json({ error: 'Repository not found' }, 404);
-  }
-
-  // Use GitHub App auth (JWT) to check installation status
-  // This endpoint requires app-level auth, not user OAuth
-  const appOctokit = createAppOctokit();
-
-  try {
-    // Check if the app is installed on this repo
-    const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
-      owner: repo.owner,
-      repo: repo.name,
-    });
-
-    // Update the database with the installation ID
-    await prisma.gateRepo.update({
-      where: { id },
-      data: { githubAppInstallationId: installation.id },
-    });
-
-    return c.json({
-      synced: true,
-      github_app_installed: true,
-      installation_id: installation.id,
-    });
-  } catch (error: unknown) {
-    // If 404, app is not installed on this repo
-    if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
-      // Clear installation ID if it was set
-      await prisma.gateRepo.update({
-        where: { id },
-        data: { githubAppInstallationId: null },
-      });
-
-      return c.json({
-        synced: true,
-        github_app_installed: false,
-        installation_id: null,
-      });
-    }
-    throw error;
-  }
 });
 
 // Get GitHub App installation URL

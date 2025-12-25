@@ -217,6 +217,21 @@ extension Array where Element == HRBucket {
     }
 }
 
+extension Array where Element == Int {
+    /// Convert raw BPM values to chart points with synthetic timestamps
+    func toChartPoints() -> [HRChartPoint] {
+        let now = Date()
+        return enumerated().map { index, bpm in
+            HRChartPoint(
+                date: now.addingTimeInterval(Double(index - count) * 60),
+                bpm: bpm,
+                minBpm: nil,
+                maxBpm: nil
+            )
+        }
+    }
+}
+
 // MARK: - Previews
 
 #Preview("Full Chart") {

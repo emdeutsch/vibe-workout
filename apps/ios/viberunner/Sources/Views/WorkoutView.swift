@@ -7,6 +7,9 @@ struct WorkoutView: View {
 
     @State private var showingError = false
     @State private var showingRepoSelector = false
+    @State private var showingStopConfirmation = false
+    @State private var showingPostWorkoutSummary = false
+    @State private var completedSessionId: String?
 
     var body: some View {
         NavigationStack {
@@ -71,6 +74,36 @@ struct WorkoutView: View {
             } message: {
                 Text(workoutService.error ?? "An error occurred")
             }
+            .confirmationDialog(
+                "End Workout?",
+                isPresented: $showingStopConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("End & View Summary", role: .destructive) {
+                    Task { await endWorkoutAndShowSummary() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You'll review your stats before saving.")
+            }
+            .fullScreenCover(isPresented: $showingPostWorkoutSummary) {
+                if let sessionId = completedSessionId {
+                    PostWorkoutSummaryView(sessionId: sessionId)
+                        .environmentObject(apiService)
+                }
+            }
+        }
+    }
+
+    // MARK: - End Workout Flow
+
+    private func endWorkoutAndShowSummary() async {
+        watchConnectivity.sendWorkoutStopped()
+        let sessionId = try? await workoutService.stopWorkout()
+
+        if let sessionId = sessionId {
+            completedSessionId = sessionId
+            showingPostWorkoutSummary = true
         }
     }
 
@@ -80,10 +113,7 @@ struct WorkoutView: View {
     private var workoutActionButton: some View {
         if workoutService.isActive {
             Button {
-                Task {
-                    watchConnectivity.sendWorkoutStopped()
-                    try? await workoutService.stopWorkout()
-                }
+                showingStopConfirmation = true
             } label: {
                 HStack(spacing: Spacing.sm) {
                     Image(systemName: "stop.fill")

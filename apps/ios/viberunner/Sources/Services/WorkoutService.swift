@@ -43,8 +43,10 @@ class WorkoutService: ObservableObject {
         startStatusPolling()
     }
 
-    func stopWorkout() async throws {
-        try await APIService.shared.stopWorkout()
+    /// Stop the current workout and return the stopped session ID
+    func stopWorkout() async throws -> String? {
+        let response = try await APIService.shared.stopWorkout()
+        let stoppedSessionId = currentSessionId
         currentSessionId = nil
         isActive = false
         // Don't reset currentBPM - keep showing HR from watch
@@ -53,6 +55,8 @@ class WorkoutService: ObservableObject {
 
         // Stop polling
         stopStatusPolling()
+
+        return stoppedSessionId
     }
 
     // MARK: - HR Sample Ingestion

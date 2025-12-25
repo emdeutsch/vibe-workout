@@ -238,12 +238,22 @@ struct WorkoutSessionListItem: Codable, Identifiable {
     let source: String
     let summary: WorkoutSummary?
     let commitCount: Int
+    let totalLinesAdded: Int?
+    let totalLinesRemoved: Int?
+    let topRepo: String?
+    let repoNames: [String]?
+    let sparklineBpms: [Int]?
 
     enum CodingKeys: String, CodingKey {
         case id, active, source, summary
         case startedAt = "started_at"
         case endedAt = "ended_at"
         case commitCount = "commit_count"
+        case totalLinesAdded = "total_lines_added"
+        case totalLinesRemoved = "total_lines_removed"
+        case topRepo = "top_repo"
+        case repoNames = "repo_names"
+        case sparklineBpms = "sparkline_bpms"
     }
 
     var startDate: Date? {
@@ -359,6 +369,58 @@ struct HRSamplesResponse: Codable {
 
 struct HRBucketsResponse: Codable {
     let buckets: [HRBucket]
+}
+
+// MARK: - Post-Workout Summary
+
+struct RepoStats: Codable, Identifiable {
+    let owner: String
+    let name: String
+    let commitCount: Int
+    let linesAdded: Int
+    let linesRemoved: Int
+    let firstCommitAt: String?
+    let lastCommitAt: String?
+
+    var id: String { "\(owner)/\(name)" }
+    var fullName: String { "\(owner)/\(name)" }
+
+    enum CodingKeys: String, CodingKey {
+        case owner, name
+        case commitCount = "commit_count"
+        case linesAdded = "lines_added"
+        case linesRemoved = "lines_removed"
+        case firstCommitAt = "first_commit_at"
+        case lastCommitAt = "last_commit_at"
+    }
+}
+
+struct PostWorkoutSummary: Codable {
+    let session: WorkoutSessionDetail
+    let repoBreakdown: [RepoStats]
+    let totalLinesAdded: Int
+    let totalLinesRemoved: Int
+    let totalCommits: Int
+
+    enum CodingKeys: String, CodingKey {
+        case session
+        case repoBreakdown = "repo_breakdown"
+        case totalLinesAdded = "total_lines_added"
+        case totalLinesRemoved = "total_lines_removed"
+        case totalCommits = "total_commits"
+    }
+}
+
+struct StopWorkoutResponse: Codable {
+    let stopped: Bool
+    let sessionsEnded: Int
+    let sessionIds: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case stopped
+        case sessionsEnded = "sessions_ended"
+        case sessionIds = "session_ids"
+    }
 }
 
 // MARK: - API Responses

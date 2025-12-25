@@ -174,9 +174,6 @@ struct GateRepoRow: View {
 
     @State private var showingInstallAlert = false
     @State private var installURL: URL?
-    #if DEBUG
-    @State private var isSyncing = false
-    #endif
 
     var body: some View {
         HStack(spacing: 12) {
@@ -209,27 +206,6 @@ struct GateRepoRow: View {
             Spacer()
 
             if !repo.githubAppInstalled {
-                #if DEBUG
-                // Debug: Sync button for local dev (webhooks don't work locally)
-                Button {
-                    Task {
-                        isSyncing = true
-                        try? await apiService.syncGateRepoInstallation(id: repo.id)
-                        isSyncing = false
-                    }
-                } label: {
-                    if isSyncing {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(.purple)
-                #endif
-
                 Button("Install App") {
                     showingInstallAlert = true
                 }
@@ -258,7 +234,7 @@ struct GateRepoRow: View {
                 .ignoresSafeArea()
         }
         .onChange(of: installURL) { oldValue, newValue in
-            // Refresh repos when Safari sheet closes (webhook will have updated the DB)
+            // Refresh repos when Safari sheet closes (API will check installation status)
             if oldValue != nil && newValue == nil {
                 Task {
                     try? await apiService.fetchGateRepos()
