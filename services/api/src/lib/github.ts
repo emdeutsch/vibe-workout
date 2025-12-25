@@ -353,8 +353,7 @@ export async function updateSignalRef(
     parents: [],
   });
 
-  // Use updateRef (idempotent, handles concurrent requests)
-  // Only createRef if ref doesn't exist (404)
+  // Use updateRef (idempotent), fall back to delete+create on errors
   const shortRef = refName.replace('refs/', '');
 
   try {
@@ -365,30 +364,47 @@ export async function updateSignalRef(
       sha: commit.sha,
       force: true,
     });
+    return; // Success
   } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 404) {
-      // Ref doesn't exist yet, create it
-      try {
-        await octokit.rest.git.createRef({
-          owner,
-          repo,
-          ref: refName,
-          sha: commit.sha,
-        });
-      } catch (createErr: unknown) {
-        // If create fails with 422 (race: another request created it), that's fine - ignore
-        if (
-          createErr &&
-          typeof createErr === 'object' &&
-          'status' in createErr &&
-          (createErr as { status: number }).status === 422
-        ) {
-          return; // Another request won the race, signal is updated
-        }
-        throw createErr;
-      }
-    } else {
-      throw e;
+    const status =
+      e && typeof e === 'object' && 'status' in e ? (e as { status: number }).status : 0;
+
+    if (status === 404) {
+      // Ref doesn't exist, create it
+      await createRefSafe(octokit, owner, repo, refName, commit.sha);
+      return;
     }
+
+    if (status === 422) {
+      // "Reference cannot be updated" - delete and recreate
+      try {
+        await octokit.rest.git.deleteRef({ owner, repo, ref: shortRef });
+      } catch {
+        // Ignore delete errors
+      }
+      await createRefSafe(octokit, owner, repo, refName, commit.sha);
+      return;
+    }
+
+    throw e;
+  }
+}
+
+// Helper: createRef that ignores "already exists" race condition
+async function createRefSafe(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  refName: string,
+  sha: string
+): Promise<void> {
+  try {
+    await octokit.rest.git.createRef({ owner, repo, ref: refName, sha });
+  } catch (e: unknown) {
+    // 422 = "Reference already exists" - race condition, another request won, that's fine
+    if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 422) {
+      return;
+    }
+    throw e;
   }
 }
