@@ -43,12 +43,14 @@ export async function updateSignalRef(
   const { data: tree } = await octokit.rest.git.createTree({
     owner,
     repo,
-    tree: [{
-      path: 'hr-signal.json',
-      mode: '100644',
-      type: 'blob',
-      sha: blob.sha,
-    }],
+    tree: [
+      {
+        path: 'hr-signal.json',
+        mode: '100644',
+        type: 'blob',
+        sha: blob.sha,
+      },
+    ],
   });
 
   // Create a commit (parentless since this is a signal ref)
@@ -71,8 +73,8 @@ export async function updateSignalRef(
       force: true,
     });
   } catch (error: unknown) {
-    // If ref doesn't exist, create it
-    if (error && typeof error === 'object' && 'status' in error && error.status === 422) {
+    // If ref doesn't exist (404), create it
+    if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
       await octokit.rest.git.createRef({
         owner,
         repo,
