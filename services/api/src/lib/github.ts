@@ -353,68 +353,33 @@ export async function updateSignalRef(
     parents: [],
   });
 
-  // Update or create the ref - handle all edge cases
+  // Simple update or create - keep it fast
   const shortRef = refName.replace('refs/', '');
 
-  // Helper to attempt updateRef
-  const tryUpdate = async (): Promise<boolean> => {
-    try {
-      await octokit.rest.git.updateRef({
-        owner,
-        repo,
-        ref: shortRef,
-        sha: commit.sha,
-        force: true,
-      });
-      return true;
-    } catch (e: unknown) {
-      if (e && typeof e === 'object' && 'status' in e) {
-        const status = (e as { status: number }).status;
-        if (status === 404 || status === 422) {
-          return false; // 404 = doesn't exist, 422 = can't update
-        }
-      }
-      throw e;
-    }
-  };
+  try {
+    // Try update first (most common case - ref exists)
+    await octokit.rest.git.updateRef({
+      owner,
+      repo,
+      ref: shortRef,
+      sha: commit.sha,
+      force: true,
+    });
+  } catch (e: unknown) {
+    const status =
+      e && typeof e === 'object' && 'status' in e ? (e as { status: number }).status : 0;
 
-  // Helper to attempt createRef
-  const tryCreate = async (): Promise<boolean> => {
-    try {
+    if (status === 404) {
+      // Ref doesn't exist, create it
       await octokit.rest.git.createRef({
         owner,
         repo,
         ref: refName,
         sha: commit.sha,
       });
-      return true;
-    } catch (e: unknown) {
-      if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 422) {
-        return false; // Ref already exists
-      }
+    } else {
+      // For any other error (including 422), just throw - don't do complex fallbacks
       throw e;
     }
-  };
-
-  // Helper to delete ref
-  const tryDelete = async (): Promise<void> => {
-    try {
-      await octokit.rest.git.deleteRef({ owner, repo, ref: shortRef });
-    } catch {
-      // Ignore - ref might not exist
-    }
-  };
-
-  // Strategy: try update, if 404 try create, if either fails with 422 delete and retry
-  if (await tryUpdate()) return;
-  if (await tryCreate()) return;
-
-  // Both failed - ref is in a bad state, delete and recreate
-  await tryDelete();
-
-  // After delete, try create first (more likely to succeed)
-  if (await tryCreate()) return;
-
-  // If create still fails, try update as last resort
-  await tryUpdate();
+  }
 }
