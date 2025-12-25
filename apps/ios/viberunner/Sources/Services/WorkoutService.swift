@@ -16,8 +16,8 @@ class WorkoutService: ObservableObject {
     // Debug HR Simulator (only works in DEBUG builds)
     #if DEBUG
     @Published var isSimulatingHR = false
+    @Published var manualBPM: Int = 100
     private var simulatorTimer: Timer?
-    private var simulatedBPM: Int = 85
     #endif
 
     private var statusTimer: Timer?
@@ -139,17 +139,23 @@ class WorkoutService: ObservableObject {
         }
     }
 
+    /// Set manual heart rate value - immediately updates the display and sends to API if workout is active
+    func setManualHeartRate(_ bpm: Int) {
+        manualBPM = min(max(bpm, 50), 180)
+        // Always update the display via updateHeartRate (which also sends to API if active)
+        Task { await updateHeartRate(manualBPM) }
+    }
+
     private func startHRSimulator() {
-        simulatedBPM = Int.random(in: 80...95)
+        // Immediately update display with current manual value
+        Task { await updateHeartRate(manualBPM) }
+
+        // Timer periodically sends HR to API when workout is active
         simulatorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self = self, self.isSimulatingHR, self.isActive else { return }
-
-                // Simulate realistic HR variation
-                let change = Int.random(in: -5...8)
-                self.simulatedBPM = min(max(self.simulatedBPM + change, 70), 165)
-
-                await self.ingestHeartRate(self.simulatedBPM)
+                guard let self = self, self.isSimulatingHR else { return }
+                // updateHeartRate handles both display update and API call (if active)
+                await self.updateHeartRate(self.manualBPM)
             }
         }
     }

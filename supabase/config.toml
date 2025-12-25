@@ -116,7 +116,7 @@ max_frequency = "5s"
 enabled = true
 client_id = "env(SUPABASE_AUTH_GITHUB_CLIENT_ID)"
 secret = "env(SUPABASE_AUTH_GITHUB_SECRET)"
-redirect_uri = "http://192.168.1.144:54421/auth/v1/callback"
+redirect_uri = "http://localhost:54421/auth/v1/callback"
 
 [auth.external.apple]
 enabled = false

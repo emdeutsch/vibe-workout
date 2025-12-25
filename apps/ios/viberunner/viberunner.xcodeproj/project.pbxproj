@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0123456789ABCDEF01234501 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF0123456789ABCDEF01 /* DesignTokens.swift */; };
+		0123456789ABCDEF01234502 /* ButtonStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF0123456789ABCDEF02 /* ButtonStyles.swift */; };
+		0123456789ABCDEF01234503 /* HeartRateCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF0123456789ABCDEF03 /* HeartRateCard.swift */; };
+		0123456789ABCDEF01234504 /* ActiveReposSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF0123456789ABCDEF04 /* ActiveReposSection.swift */; };
+		0123456789ABCDEF01234505 /* WatchConnectionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF0123456789ABCDEF05 /* WatchConnectionCard.swift */; };
+		0123456789ABCDEF01234506 /* DebugHRSimulatorCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF0123456789ABCDEF06 /* DebugHRSimulatorCard.swift */; };
 		047C9076A4CD4BD710EE76E9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05C595B6F87FF2698677B08C /* ContentView.swift */; };
 		07E7C27F6E4031FF931442DE /* WatchConnectivityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37E5671337D3C6B6222E63DF /* WatchConnectivityService.swift */; };
 		0FBBBD6FE395DB1544FDE195 /* viberunnerWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDA8DE2CD0B81969995D479D /* viberunnerWatchApp.swift */; };
@@ -92,6 +98,12 @@
 		D03F2A88FEDA2CA4D06E35D8 /* viberunner-watch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "viberunner-watch.entitlements"; sourceTree = "<group>"; };
 		EDA8DE2CD0B81969995D479D /* viberunnerWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = viberunnerWatchApp.swift; sourceTree = "<group>"; };
 		FA0D3D293421FA93F15D80D3 /* viberunner.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = viberunner.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		ABCDEF0123456789ABCDEF01 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
+		ABCDEF0123456789ABCDEF02 /* ButtonStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonStyles.swift; sourceTree = "<group>"; };
+		ABCDEF0123456789ABCDEF03 /* HeartRateCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartRateCard.swift; sourceTree = "<group>"; };
+		ABCDEF0123456789ABCDEF04 /* ActiveReposSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveReposSection.swift; sourceTree = "<group>"; };
+		ABCDEF0123456789ABCDEF05 /* WatchConnectionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchConnectionCard.swift; sourceTree = "<group>"; };
+		ABCDEF0123456789ABCDEF06 /* DebugHRSimulatorCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugHRSimulatorCard.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,6 +155,7 @@
 			isa = PBXGroup;
 			children = (
 				F6DAA83C4CF49C0D9F73CB79 /* App */,
+				ABCDEF0123456789ABCD0008 /* Design */,
 				861171C12178DD0674A877A6 /* Models */,
 				9FC2652323311A46A00CAA07 /* Services */,
 				334DAA4D3881E5CC55D21FAE /* Views */,
@@ -244,9 +257,30 @@
 		FA2AC809E009B40AD34CBBF9 /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				ABCDEF0123456789ABCD0007 /* Workout */,
 				C3033C10836B66EB70741992 /* HeartRateChartView.swift */,
 			);
 			path = Components;
+			sourceTree = "<group>";
+		};
+		ABCDEF0123456789ABCD0007 /* Workout */ = {
+			isa = PBXGroup;
+			children = (
+				ABCDEF0123456789ABCDEF03 /* HeartRateCard.swift */,
+				ABCDEF0123456789ABCDEF04 /* ActiveReposSection.swift */,
+				ABCDEF0123456789ABCDEF05 /* WatchConnectionCard.swift */,
+				ABCDEF0123456789ABCDEF06 /* DebugHRSimulatorCard.swift */,
+			);
+			path = Workout;
+			sourceTree = "<group>";
+		};
+		ABCDEF0123456789ABCD0008 /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				ABCDEF0123456789ABCDEF01 /* DesignTokens.swift */,
+				ABCDEF0123456789ABCDEF02 /* ButtonStyles.swift */,
+			);
+			path = Design;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -371,6 +405,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0123456789ABCDEF01234501 /* DesignTokens.swift in Sources */,
+				0123456789ABCDEF01234502 /* ButtonStyles.swift in Sources */,
+				0123456789ABCDEF01234503 /* HeartRateCard.swift in Sources */,
+				0123456789ABCDEF01234504 /* ActiveReposSection.swift in Sources */,
+				0123456789ABCDEF01234505 /* WatchConnectionCard.swift in Sources */,
+				0123456789ABCDEF01234506 /* DebugHRSimulatorCard.swift in Sources */,
 				B1DBA3228460150F65BE6416 /* APIService.swift in Sources */,
 				65EFCEB825FE8B0D2A982BDA /* AuthService.swift in Sources */,
 				762E8841D6F0F9E7B6EAE260 /* Config.swift in Sources */,

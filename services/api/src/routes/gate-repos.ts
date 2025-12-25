@@ -8,6 +8,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { decrypt } from '../lib/encryption.js';
 import {
   createUserOctokit,
+  createAppOctokit,
   createRepoFromTemplate,
   createEmptyRepo,
   createRepoInOrg,
@@ -40,7 +41,7 @@ gateRepos.use('*', async (c, next) => {
 function generateBootstrapFiles(
   userKey: string,
   publicKey: string
-): Array<{ path: string; content: string }> {
+): Array<{ path: string; content: string; executable?: boolean }> {
   const signalRef = buildSignalRef(userKey);
 
   // viberunner.config.json
@@ -54,13 +55,30 @@ function generateBootstrapFiles(
     ttl_seconds: config.hrTtlSeconds,
   };
 
-  // .claude/settings.json - Claude Code hook configuration
+  // .claude/settings.json - Claude Code configuration
+  // HR gating IS the approval mechanism, so bypass Claude's permission prompts
   const claudeSettings = {
+    permissions: {
+      allow: [
+        'Bash',
+        'Read',
+        'Write',
+        'Edit',
+        'MultiEdit',
+        'Glob',
+        'Grep',
+        'WebFetch',
+        'WebSearch',
+        'Task',
+        'NotebookEdit',
+      ],
+      deny: [],
+    },
     hooks: {
       PreToolUse: [
         {
           matcher: '*',
-          hooks: ['./scripts/viberunner-hr-check'],
+          hooks: [{ type: 'command', command: './scripts/viberunner-hr-check' }],
         },
       ],
     },
@@ -83,10 +101,40 @@ CONFIG_FILE="viberunner.config.json"
 SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Portable hex to binary conversion (works without xxd)
+hex_to_bin() {
+  local hex="$1"
+  local outfile="$2"
+  if command -v xxd >/dev/null 2>&1; then
+    echo -n "$hex" | xxd -r -p > "$outfile"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'print pack("H*", $ARGV[0])' "$hex" > "$outfile"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import sys; sys.stdout.buffer.write(bytes.fromhex('$hex'))" > "$outfile"
+  else
+    echo "viberunner: no hex decoder (need xxd, perl, or python3) — tools locked" >&2
+    exit 2
+  fi
+}
+
+# Portable binary to hex conversion
+bin_to_hex() {
+  local infile="$1"
+  if command -v xxd >/dev/null 2>&1; then
+    xxd -p -c 256 < "$infile" | tr -d '\\n'
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'local $/; print unpack("H*", <>)' < "$infile"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import sys; print(sys.stdin.buffer.read().hex(), end='')" < "$infile"
+  else
+    echo "viberunner: no hex encoder (need xxd, perl, or python3) — tools locked" >&2
+    exit 2
+  fi
+}
+
 # Check for required tools
 command -v jq >/dev/null 2>&1 || { echo "viberunner: jq not installed — tools locked" >&2; exit 2; }
 command -v openssl >/dev/null 2>&1 || { echo "viberunner: openssl not installed — tools locked" >&2; exit 2; }
-command -v xxd >/dev/null 2>&1 || { echo "viberunner: xxd not installed — tools locked" >&2; exit 2; }
 
 # Read config
 if [[ ! -f "$REPO_ROOT/$CONFIG_FILE" ]]; then
@@ -176,16 +224,18 @@ cleanup() {
 trap cleanup EXIT
 
 # Convert hex signature to binary
-echo -n "$SIG" | xxd -r -p > "$SIG_BIN"
+hex_to_bin "$SIG" "$SIG_BIN"
 
 # Convert hex public key to binary
-echo -n "$PUBLIC_KEY" | xxd -r -p > "$PUB_KEY_BIN"
+hex_to_bin "$PUBLIC_KEY" "$PUB_KEY_BIN"
 
 # Create PEM formatted Ed25519 public key
 # OID prefix for Ed25519: 302a300506032b6570032100
+PUB_KEY_HEX=$(bin_to_hex "$PUB_KEY_BIN")
+FULL_KEY_HEX="302a300506032b6570032100$PUB_KEY_HEX"
 {
   echo "-----BEGIN PUBLIC KEY-----"
-  (echo -n "302a300506032b6570032100"; cat "$PUB_KEY_BIN" | xxd -p -c 32) | xxd -r -p | base64
+  hex_to_bin "$FULL_KEY_HEX" /dev/stdout | base64
   echo "-----END PUBLIC KEY-----"
 } > "$PUB_KEY_PEM"
 
@@ -260,7 +310,7 @@ To temporarily disable HR gating:
   return [
     { path: 'viberunner.config.json', content: JSON.stringify(configContent, null, 2) },
     { path: '.claude/settings.json', content: JSON.stringify(claudeSettings, null, 2) },
-    { path: 'scripts/viberunner-hr-check', content: hrCheckScript },
+    { path: 'scripts/viberunner-hr-check', content: hrCheckScript, executable: true },
     { path: 'CLAUDE.md', content: claudeMd },
   ];
 }
@@ -467,7 +517,7 @@ gateRepos.post('/', async (c) => {
   };
 
   try {
-    let repoInfo: { owner: string; name: string; html_url: string };
+    let repoInfo: { id: number; owner: string; name: string; html_url: string };
 
     // Try template first, fall back to empty repo
     try {
@@ -528,8 +578,8 @@ gateRepos.post('/', async (c) => {
     });
 
     // Build GitHub App installation URL
-    // Simple URL that lets user select the repo during installation
-    const installUrl = `https://github.com/apps/viberunner-ai/installations/new`;
+    // Note: GitHub doesn't support pre-selecting repos in the /new URL, user must select during install
+    const installUrl = `https://github.com/apps/${config.githubAppSlug}/installations/new`;
 
     const response: CreateGateRepoResponse = {
       id: gateRepo.id,
@@ -676,6 +726,59 @@ gateRepos.post('/webhook/installation', async (c) => {
   return c.json({ received: true });
 });
 
+// Sync installation status by checking GitHub API
+// Useful for local dev where webhooks can't reach localhost
+gateRepos.post('/:id/sync-installation', async (c) => {
+  const userId = c.get('userId');
+  const id = c.req.param('id');
+
+  const repo = await prisma.gateRepo.findFirst({ where: { id, userId } });
+
+  if (!repo) {
+    return c.json({ error: 'Repository not found' }, 404);
+  }
+
+  // Use GitHub App auth (JWT) to check installation status
+  // This endpoint requires app-level auth, not user OAuth
+  const appOctokit = createAppOctokit();
+
+  try {
+    // Check if the app is installed on this repo
+    const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
+      owner: repo.owner,
+      repo: repo.name,
+    });
+
+    // Update the database with the installation ID
+    await prisma.gateRepo.update({
+      where: { id },
+      data: { githubAppInstallationId: installation.id },
+    });
+
+    return c.json({
+      synced: true,
+      github_app_installed: true,
+      installation_id: installation.id,
+    });
+  } catch (error: unknown) {
+    // If 404, app is not installed on this repo
+    if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+      // Clear installation ID if it was set
+      await prisma.gateRepo.update({
+        where: { id },
+        data: { githubAppInstallationId: null },
+      });
+
+      return c.json({
+        synced: true,
+        github_app_installed: false,
+        installation_id: null,
+      });
+    }
+    throw error;
+  }
+});
+
 // Get GitHub App installation URL
 gateRepos.get('/:id/install-url', async (c) => {
   const userId = c.get('userId');
@@ -689,9 +792,8 @@ gateRepos.get('/:id/install-url', async (c) => {
     return c.json({ error: 'Repository not found' }, 404);
   }
 
-  // GitHub App installation URL
-  // Simple URL - user will select the repo during installation
-  const installUrl = `https://github.com/apps/viberunner-ai/installations/new`;
+  // GitHub doesn't support pre-selecting repos via URL - user must select during install
+  const installUrl = `https://github.com/apps/${config.githubAppSlug}/installations/new`;
 
   return c.json({
     install_url: installUrl,
