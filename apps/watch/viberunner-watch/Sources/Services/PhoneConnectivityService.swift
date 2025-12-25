@@ -71,27 +71,24 @@ class PhoneConnectivityService: NSObject, ObservableObject {
     private func doSendHeartRate(_ bpm: Int) {
         lastSendTime = Date()
 
-        guard let session = session, session.isReachable else {
-            // Fallback: send via application context when phone not reachable
-            // This ensures data isn't lost when phone is in background
-            try? session?.updateApplicationContext([
-                "heartRate": bpm,
-                "timestamp": Date().timeIntervalSince1970
-            ])
-            return
-        }
+        guard let session = session else { return }
 
-        // Primary: send interactive message for real-time delivery
-        session.sendMessage(["heartRate": bpm], replyHandler: { response in
-            // Message delivered successfully
-        }) { error in
-            print("Failed to send heart rate: \(error)")
+        let payload: [String: Any] = [
+            "heartRate": bpm,
+            "timestamp": Date().timeIntervalSince1970
+        ]
 
-            // Fallback to application context on failure
-            try? self.session?.updateApplicationContext([
-                "heartRate": bpm,
-                "timestamp": Date().timeIntervalSince1970
-            ])
+        if session.isReachable {
+            // Primary: send interactive message for real-time delivery
+            session.sendMessage(payload, replyHandler: nil) { error in
+                print("sendMessage failed: \(error.localizedDescription), using transferUserInfo")
+                // Fallback to transferUserInfo on failure - queues for guaranteed delivery
+                session.transferUserInfo(payload)
+            }
+        } else {
+            // When not reachable (screen dimmed), use transferUserInfo
+            // Unlike applicationContext, this QUEUES messages for delivery when phone is available
+            session.transferUserInfo(payload)
         }
     }
 

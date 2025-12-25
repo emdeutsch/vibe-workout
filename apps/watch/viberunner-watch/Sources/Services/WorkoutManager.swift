@@ -11,6 +11,7 @@ class WorkoutManager: NSObject, ObservableObject {
     @Published var isMonitoring = false
     @Published var currentHeartRate: Int = 0
     @Published var threshold: Int = 100
+    @Published var isMirroringActive = false
 
     // Phone workout state (controlled by iPhone app)
     @Published var isPhoneWorkoutActive = false
@@ -109,6 +110,10 @@ class WorkoutManager: NSObject, ObservableObject {
                     if success {
                         self?.isMonitoring = true
                         print("✅ HR monitoring started successfully!")
+
+                        // Start mirroring to companion device (iPhone)
+                        // This enables real-time HR delivery even when watch screen dims
+                        self?.startMirroringToPhone()
                     } else if let error = error {
                         print("❌ Failed to begin HR monitoring: \(error)")
                         // Clean up on failure
@@ -149,6 +154,8 @@ class WorkoutManager: NSObject, ObservableObject {
     private func finishWorkout(endDate: Date) {
         // We don't save the workout to HealthKit since this is just for HR monitoring
         // The user didn't explicitly start a "workout" - we're just reading HR
+        isMirroringActive = false
+
         workoutBuilder?.endCollection(withEnd: endDate) { [weak self] _, _ in
             // Discard the workout (don't save to Health app)
             self?.workoutBuilder?.discardWorkout()
@@ -157,6 +164,56 @@ class WorkoutManager: NSObject, ObservableObject {
                 self?.workoutSession = nil
                 self?.workoutBuilder = nil
             }
+        }
+    }
+
+    // MARK: - HKWorkoutSession Mirroring
+
+    /// Start mirroring the workout session to iPhone.
+    /// This enables real-time HR delivery even when watch screen dims.
+    private func startMirroringToPhone() {
+        guard let session = workoutSession else {
+            print("[Mirroring] No workout session to mirror")
+            return
+        }
+
+        Task {
+            do {
+                try await session.startMirroringToCompanionDevice()
+                await MainActor.run {
+                    self.isMirroringActive = true
+                    print("[Mirroring] Started mirroring to iPhone")
+                }
+            } catch {
+                print("[Mirroring] Failed to start mirroring: \(error)")
+                // Mirroring failed, but HR monitoring still works via WatchConnectivity fallback
+            }
+        }
+    }
+
+    /// Send HR to iPhone via HKWorkoutSession mirroring.
+    /// This works even when watch screen is dimmed, unlike WatchConnectivity.
+    func sendHeartRateViaMirroring(_ bpm: Int) {
+        guard let session = workoutSession, isMirroringActive else {
+            return
+        }
+
+        let payload: [String: Any] = [
+            "heartRate": bpm,
+            "timestamp": Date().timeIntervalSince1970
+        ]
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            Task {
+                do {
+                    try await session.sendToRemoteWorkoutSession(data: data)
+                } catch {
+                    print("[Mirroring] Failed to send HR: \(error)")
+                }
+            }
+        } catch {
+            print("[Mirroring] Failed to encode HR data: \(error)")
         }
     }
 }
@@ -198,6 +255,18 @@ extension WorkoutManager: HKWorkoutSessionDelegate {
         print("Workout session failed: \(error)")
         Task { @MainActor in
             self.isMonitoring = false
+            self.isMirroringActive = false
+        }
+    }
+
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didDisconnectFromRemoteDeviceWithError error: Error?
+    ) {
+        Task { @MainActor in
+            print("[Mirroring] Disconnected from iPhone: \(error?.localizedDescription ?? "no error")")
+            self.isMirroringActive = false
+            // Note: HR data will continue via WatchConnectivity fallback
         }
     }
 }
@@ -220,6 +289,12 @@ extension WorkoutManager: HKLiveWorkoutBuilderDelegate {
 
                 Task { @MainActor in
                     self.currentHeartRate = heartRate
+
+                    // Primary: Send via HKWorkoutSession mirroring (works when screen dims)
+                    if self.isMirroringActive {
+                        self.sendHeartRateViaMirroring(heartRate)
+                    }
+                    // Fallback: Send via WatchConnectivity (for backwards compatibility)
                     PhoneConnectivityService.shared.sendHeartRate(heartRate)
 
                     // Reload watch face complications with updated HR

@@ -1,4 +1,5 @@
 import Foundation
+import HealthKit
 import WatchConnectivity
 
 @MainActor
@@ -9,12 +10,18 @@ class WatchConnectivityService: NSObject, ObservableObject {
     @Published var isWatchAppInstalled = false
     @Published var lastReceivedBPM: Int?
     @Published var lastReceivedTimestamp: Date?
+    @Published var isMirroringActive = false
 
     private var session: WCSession?
+
+    // HealthKit for workout session mirroring (receives HR even when watch screen dims)
+    private let healthStore = HKHealthStore()
+    private var mirroredSession: HKWorkoutSession?
 
     override private init() {
         super.init()
         setupSession()
+        setupWorkoutMirroring()
     }
 
     private func setupSession() {
@@ -26,6 +33,39 @@ class WatchConnectivityService: NSObject, ObservableObject {
         session = WCSession.default
         session?.delegate = self
         session?.activate()
+    }
+
+    // MARK: - HKWorkoutSession Mirroring
+
+    /// Set up handler to receive mirrored workout sessions from watch.
+    /// This enables real-time HR delivery even when watch screen is dimmed.
+    private func setupWorkoutMirroring() {
+        healthStore.workoutSessionMirroringStartHandler = { [weak self] mirroredSession in
+            Task { @MainActor in
+                guard let self = self else { return }
+                print("[Mirroring] Received mirrored workout session from watch")
+                self.mirroredSession = mirroredSession
+                mirroredSession.delegate = self
+                self.isMirroringActive = true
+            }
+        }
+    }
+
+    /// Request HealthKit authorization to enable workout session mirroring.
+    /// Call this on app launch to ensure we can receive mirrored sessions.
+    func requestHealthKitAuthorization() {
+        let typesToRead: Set<HKObjectType> = [
+            HKObjectType.quantityType(forIdentifier: .heartRate)!,
+            HKObjectType.workoutType()
+        ]
+
+        healthStore.requestAuthorization(toShare: nil, read: typesToRead) { success, error in
+            if let error = error {
+                print("[Mirroring] HealthKit authorization error: \(error)")
+            } else if success {
+                print("[Mirroring] HealthKit authorization granted")
+            }
+        }
     }
 
     // MARK: - Send Commands to Watch
@@ -196,15 +236,94 @@ extension WatchConnectivityService: WCSessionDelegate {
         }
     }
 
-    // MARK: - Receive Application Context (Fallback/Background)
+    // MARK: - Receive User Info (Background transfer - queued delivery)
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any] = [:]) {
+        Task { @MainActor in
+            // Handle heart rate from transferUserInfo (used when watch screen dims)
+            // Unlike applicationContext, transferUserInfo queues all messages for guaranteed delivery
+            if let bpm = userInfo["heartRate"] as? Int {
+                let timestamp = userInfo["timestamp"] as? TimeInterval
+                await self.processHeartRate(bpm, timestamp: timestamp)
+            }
+        }
+    }
+
+    // MARK: - Receive Application Context (Legacy fallback)
 
     nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {
         Task { @MainActor in
-            // Handle heart rate from application context (fallback when sendMessage fails)
+            // Handle heart rate from application context (legacy fallback)
             if let bpm = applicationContext["heartRate"] as? Int {
                 let timestamp = applicationContext["timestamp"] as? TimeInterval
                 await self.processHeartRate(bpm, timestamp: timestamp)
             }
+        }
+    }
+}
+
+// MARK: - HKWorkoutSessionDelegate (Mirroring)
+
+extension WatchConnectivityService: HKWorkoutSessionDelegate {
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didChangeTo toState: HKWorkoutSessionState,
+        from fromState: HKWorkoutSessionState,
+        date: Date
+    ) {
+        Task { @MainActor in
+            switch toState {
+            case .ended, .stopped:
+                print("[Mirroring] Session ended")
+                self.mirroredSession = nil
+                self.isMirroringActive = false
+            case .running:
+                print("[Mirroring] Session running")
+            default:
+                break
+            }
+        }
+    }
+
+    nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
+        Task { @MainActor in
+            print("[Mirroring] Session error: \(error)")
+            self.isMirroringActive = false
+        }
+    }
+
+    /// Receive HR data from watch via HKWorkoutSession mirroring.
+    /// This works even when the watch screen is dimmed, unlike WatchConnectivity.
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didReceiveDataFromRemoteWorkoutSession data: [Data]
+    ) {
+        Task { @MainActor in
+            for payload in data {
+                do {
+                    guard let dict = try JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+                        continue
+                    }
+
+                    if let bpm = dict["heartRate"] as? Int {
+                        let timestamp = dict["timestamp"] as? TimeInterval
+                        print("[Mirroring] Received HR: \(bpm)")
+                        await self.processHeartRate(bpm, timestamp: timestamp)
+                    }
+                } catch {
+                    print("[Mirroring] Failed to decode HR data: \(error)")
+                }
+            }
+        }
+    }
+
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didDisconnectFromRemoteDeviceWithError error: Error?
+    ) {
+        Task { @MainActor in
+            print("[Mirroring] Disconnected from watch: \(error?.localizedDescription ?? "no error")")
+            self.isMirroringActive = false
         }
     }
 }

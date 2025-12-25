@@ -146,9 +146,10 @@ struct HRMonitorView: View {
         return .red
     }
 
-    /// Connected = reachable OR monitoring (data flowing via applicationContext when screen dims)
+    /// Connected = mirroring active (best) OR reachable OR monitoring
     private var isConnectedToPhone: Bool {
-        phoneConnectivity.isReachable || workoutManager.isMonitoring
+        // Mirroring is the most reliable - works even when screen dims
+        workoutManager.isMirroringActive || phoneConnectivity.isReachable || workoutManager.isMonitoring
     }
 
     /// Phone sync status view - show connected when data is flowing

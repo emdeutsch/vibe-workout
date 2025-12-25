@@ -6,8 +6,12 @@ struct WatchConnectionCard: View {
     /// Consider data "fresh" if received within last 30 seconds
     private let dataFreshnessThreshold: TimeInterval = 30
 
-    /// Connected = either directly reachable OR receiving data recently
+    /// Connected = mirroring active OR reachable OR receiving data recently
     private var isConnected: Bool {
+        // Mirroring is the most reliable - works even when watch screen dims
+        if watchConnectivity.isMirroringActive {
+            return true
+        }
         if watchConnectivity.isReachable {
             return true
         }

@@ -15,6 +15,8 @@ struct viberunnerApp: App {
                 .environmentObject(workoutService)
                 .environmentObject(watchConnectivity)
                 .onAppear {
+                    // Request HealthKit authorization for workout session mirroring
+                    watchConnectivity.requestHealthKitAuthorization()
                     // Attempt to wake watch app for HR monitoring
                     watchConnectivity.requestWatchAppLaunch()
                 }
