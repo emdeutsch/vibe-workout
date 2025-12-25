@@ -363,8 +363,8 @@ export async function updateSignalRef(
       force: true,
     });
   } catch (error: unknown) {
-    // If ref doesn't exist, create it
-    if (error && typeof error === 'object' && 'status' in error && error.status === 422) {
+    // If ref doesn't exist (404), create it
+    if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
       await octokit.rest.git.createRef({
         owner,
         repo,
