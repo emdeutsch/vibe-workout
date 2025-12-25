@@ -290,6 +290,14 @@ class APIService: ObservableObject {
         let data = try await makeRequest(path: "api/gate-repos/\(id)/install-url")
         return try decode(InstallUrlResponse.self, from: data)
     }
+
+    /// Sync installation status for a repo by checking GitHub API
+    /// Useful for local dev where webhooks can't reach localhost
+    func syncGateRepoInstallation(id: String) async throws {
+        _ = try await makeRequest(path: "api/gate-repos/\(id)/sync-installation", method: "POST")
+        // Refresh repos list to get updated status
+        _ = try await fetchGateRepos()
+    }
 }
 
 // MARK: - API Errors

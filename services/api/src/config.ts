@@ -32,6 +32,7 @@ export const config = {
   // GitHub App (for pushing refs)
   githubAppId: requireEnv('GITHUB_APP_ID'),
   githubAppPrivateKey: requireEnv('GITHUB_APP_PRIVATE_KEY'),
+  githubAppSlug: optionalEnv('GITHUB_APP_SLUG', 'viberunner-ai'),
 
   // Viberunner signing keys (Ed25519)
   signerPrivateKey: requireEnv('SIGNER_PRIVATE_KEY'),

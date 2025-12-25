@@ -2,8 +2,9 @@
 // Points to local Supabase (via npm run dev)
 
 // API Configuration
-API_BASE_URL = http:/$()/Evans-MacBook-Pro-2.local:3000
-SUPABASE_URL = http:/$()/Evans-MacBook-Pro-2.local:54421
+// Use localhost for simulator, use Evans-MacBook-Pro-2.local for real device
+API_BASE_URL = http:/$()/localhost:3000
+SUPABASE_URL = http:/$()/localhost:54421
 SUPABASE_ANON_KEY = sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH
 
 // App Identity (allows side-by-side installation with Production)

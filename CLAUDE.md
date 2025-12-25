@@ -21,16 +21,16 @@ npx prisma migrate deploy
 
 **CRITICAL:** Before any TestFlight upload, you MUST:
 
-1. **Check the current TestFlight build number** in App Store Connect (TestFlight → Builds)
-2. **Increment CFBundleVersion** in `apps/ios/viberunner/Sources/Info.plist` to be higher than the latest TestFlight build
+1. **ASK THE USER** for the current TestFlight build number (they must check App Store Connect → TestFlight → Builds)
+2. **Increment CFBundleVersion** in `apps/ios/viberunner/Sources/Info.plist` to be higher than that number
 3. **Commit the version bump** to git before or immediately after upload
 
-The build number in git must always match or exceed the latest TestFlight build. Never trust the git value alone - always verify against TestFlight.
+**WARNING TO AGENTS:** NEVER look at git history or Info.plist to determine the current build number. Git is often out of sync with TestFlight. You MUST ask the user to check TestFlight directly. Uploading a duplicate or lower build number will fail and waste time.
 
-| File                                     | Key                          | Purpose                                                              |
-| ---------------------------------------- | ---------------------------- | -------------------------------------------------------------------- |
-| `apps/ios/viberunner/Sources/Info.plist` | `CFBundleShortVersionString` | Marketing version (e.g., "1.0")                                      |
-| `apps/ios/viberunner/Sources/Info.plist` | `CFBundleVersion`            | Build number (e.g., "8") - must increment for each TestFlight upload |
+| File                                     | Key                          | Purpose                                                                         |
+| ---------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------- |
+| `apps/ios/viberunner/Sources/Info.plist` | `CFBundleShortVersionString` | Marketing version (e.g., "1.0")                                                 |
+| `apps/ios/viberunner/Sources/Info.plist` | `CFBundleVersion`            | Build number - must increment for each TestFlight upload (ask user for current) |
 
 ### TestFlight Upload
 

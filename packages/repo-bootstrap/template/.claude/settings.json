@@ -3,7 +3,7 @@
     "PreToolUse": [
       {
         "matcher": "*",
-        "hooks": ["./scripts/viberunner-hr-check"]
+        "hooks": [{"type": "command", "command": "./scripts/viberunner-hr-check"}]
       }
     ]
   }

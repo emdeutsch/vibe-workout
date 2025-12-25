@@ -14,6 +14,20 @@ export function createUserOctokit(accessToken: string): Octokit {
 }
 
 /**
+ * Create Octokit client authenticated as the GitHub App itself (JWT auth)
+ * Used for endpoints like getRepoInstallation that require app-level auth
+ */
+export function createAppOctokit(): Octokit {
+  return new Octokit({
+    authStrategy: createAppAuth,
+    auth: {
+      appId: config.githubAppId,
+      privateKey: config.githubAppPrivateKey,
+    },
+  });
+}
+
+/**
  * Create Octokit client authenticated with GitHub App installation token
  */
 export async function createInstallationOctokit(installationId: number): Promise<Octokit> {
@@ -122,7 +136,7 @@ export async function createRepoFromTemplate(
   newName: string,
   description: string,
   isPrivate: boolean
-): Promise<{ owner: string; name: string; html_url: string }> {
+): Promise<{ id: number; owner: string; name: string; html_url: string }> {
   const { data } = await octokit.rest.repos.createUsingTemplate({
     template_owner: templateOwner,
     template_repo: templateRepo,
@@ -134,6 +148,7 @@ export async function createRepoFromTemplate(
   });
 
   return {
+    id: data.id,
     owner: data.owner.login,
     name: data.name,
     html_url: data.html_url,
@@ -162,7 +177,7 @@ export async function createEmptyRepo(
   description: string,
   isPrivate: boolean,
   options?: RepoCreationOptions
-): Promise<{ owner: string; name: string; html_url: string }> {
+): Promise<{ id: number; owner: string; name: string; html_url: string }> {
   const { data } = await octokit.rest.repos.createForAuthenticatedUser({
     name,
     description,
@@ -180,6 +195,7 @@ export async function createEmptyRepo(
   });
 
   return {
+    id: data.id,
     owner: data.owner.login,
     name: data.name,
     html_url: data.html_url,
@@ -196,7 +212,7 @@ export async function createRepoInOrg(
   description: string,
   isPrivate: boolean,
   options?: RepoCreationOptions
-): Promise<{ owner: string; name: string; html_url: string }> {
+): Promise<{ id: number; owner: string; name: string; html_url: string }> {
   const { data } = await octokit.rest.repos.createInOrg({
     org,
     name,
@@ -215,6 +231,7 @@ export async function createRepoInOrg(
   });
 
   return {
+    id: data.id,
     owner: data.owner.login,
     name: data.name,
     html_url: data.html_url,
@@ -228,7 +245,7 @@ export async function commitBootstrapFiles(
   octokit: Octokit,
   owner: string,
   repo: string,
-  files: Array<{ path: string; content: string }>,
+  files: Array<{ path: string; content: string; executable?: boolean }>,
   message: string
 ): Promise<void> {
   // Get the default branch
@@ -260,7 +277,7 @@ export async function commitBootstrapFiles(
         content: Buffer.from(file.content).toString('base64'),
         encoding: 'base64',
       });
-      return { path: file.path, sha: blob.sha };
+      return { path: file.path, sha: blob.sha, executable: file.executable };
     })
   );
 
@@ -271,7 +288,7 @@ export async function commitBootstrapFiles(
     base_tree: baseTreeSha,
     tree: blobs.map((blob) => ({
       path: blob.path,
-      mode: '100644' as const,
+      mode: blob.executable ? ('100755' as const) : ('100644' as const),
       type: 'blob' as const,
       sha: blob.sha,
     })),

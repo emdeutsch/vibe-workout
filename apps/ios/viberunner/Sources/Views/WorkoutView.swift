@@ -10,75 +10,48 @@ struct WorkoutView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 32) {
-                // Status card
-                StatusCard(
-                    isActive: workoutService.isActive,
-                    bpm: workoutService.currentBPM,
-                    toolsUnlocked: workoutService.toolsUnlocked,
-                    threshold: apiService.profile?.hrThresholdBpm ?? Config.defaultHRThreshold
-                )
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    // Heart rate card - adapts based on workout state
+                    HeartRateCard(
+                        isActive: workoutService.isActive,
+                        bpm: workoutService.currentBPM,
+                        toolsUnlocked: workoutService.toolsUnlocked,
+                        threshold: apiService.profile?.hrThresholdBpm ?? Config.defaultHRThreshold
+                    )
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: workoutService.isActive)
 
-                // Selected repos (when workout is active)
-                if workoutService.isActive && !workoutService.selectedRepos.isEmpty {
-                    SelectedReposView(repos: workoutService.selectedRepos)
-                }
-
-                // Watch connectivity status
-                WatchStatusView()
-
-                // Debug HR Simulator (only in DEBUG builds)
-                #if DEBUG
-                DebugHRSimulatorView()
-                #endif
-
-                Spacer()
-
-                // Control buttons
-                if workoutService.isActive {
-                    Button(role: .destructive) {
-                        Task {
-                            do {
-                                watchConnectivity.sendWorkoutStopped()
-                                try await workoutService.stopWorkout()
-                            } catch {
-                                showingError = true
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "stop.fill")
-                            Text("Stop Workout")
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.red)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                    // Selected repos - only when active, with horizontal scroll
+                    if workoutService.isActive && !workoutService.selectedRepos.isEmpty {
+                        ActiveReposSection(repos: workoutService.selectedRepos)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
                     }
-                } else {
-                    Button {
-                        showingRepoSelector = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "play.fill")
-                            Text("Start Workout")
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(.green)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                    }
+
+                    // Watch connectivity status
+                    WatchConnectionCard()
+
+                    // Debug HR Simulator (only in DEBUG builds)
+                    #if DEBUG
+                    DebugHRSimulatorCard()
+                    #endif
                 }
+                .padding(.horizontal, Spacing.md)
+                .padding(.top, Spacing.md)
+                .padding(.bottom, Spacing.xxl + 80) // Space for button
             }
-            .padding()
+            .safeAreaInset(edge: .bottom) {
+                workoutActionButton
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, Spacing.md)
+                    .background(.ultraThinMaterial)
+            }
             .navigationTitle("Workout")
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: workoutService.isActive)
             .task {
-                // Check for active session on appear
                 await workoutService.checkActiveSession()
-
-                // Fetch profile for threshold
                 try? await apiService.fetchProfile()
             }
             .sheet(isPresented: $showingRepoSelector) {
@@ -100,39 +73,35 @@ struct WorkoutView: View {
             }
         }
     }
-}
 
-// MARK: - Selected Repos View
+    // MARK: - Action Button
 
-struct SelectedReposView: View {
-    let repos: [SelectedRepo]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Active Repos")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                ForEach(repos) { repo in
-                    Text(repo.name)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(.green.opacity(0.15))
-                        )
-                        .foregroundStyle(.green)
+    @ViewBuilder
+    private var workoutActionButton: some View {
+        if workoutService.isActive {
+            Button {
+                Task {
+                    watchConnectivity.sendWorkoutStopped()
+                    try? await workoutService.stopWorkout()
+                }
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "stop.fill")
+                    Text("Stop Workout")
                 }
             }
+            .buttonStyle(.destructive)
+        } else {
+            Button {
+                showingRepoSelector = true
+            } label: {
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "play.fill")
+                    Text("Start Workout")
+                }
+            }
+            .buttonStyle(.primary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.ultraThinMaterial)
-        )
     }
 }
 
@@ -156,7 +125,7 @@ struct RepoSelectorSheet: View {
                 if isLoading {
                     ProgressView("Loading repos...")
                 } else if selectableRepos.isEmpty {
-                    VStack(spacing: 16) {
+                    VStack(spacing: Spacing.md) {
                         Image(systemName: "folder.badge.questionmark")
                             .font(.system(size: 48))
                             .foregroundStyle(.secondary)
@@ -172,12 +141,11 @@ struct RepoSelectorSheet: View {
                     .padding()
                 } else {
                     List {
-                        // Show deleted repos notice if any were removed
                         if deletedCount > 0 {
                             Section {
-                                HStack(spacing: 12) {
+                                HStack(spacing: Spacing.md) {
                                     Image(systemName: "trash.circle.fill")
-                                        .foregroundStyle(.orange)
+                                        .foregroundStyle(Color.statusWarning)
                                     Text("\(deletedCount) repo\(deletedCount == 1 ? " was" : "s were") removed (deleted from GitHub)")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
@@ -200,7 +168,7 @@ struct RepoSelectorSheet: View {
 
                                     if selectedRepoIds.contains(repo.id) {
                                         Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
+                                            .foregroundStyle(Color.statusSuccess)
                                     } else {
                                         Image(systemName: "circle")
                                             .foregroundStyle(.secondary)
@@ -208,10 +176,12 @@ struct RepoSelectorSheet: View {
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    if selectedRepoIds.contains(repo.id) {
-                                        selectedRepoIds.remove(repo.id)
-                                    } else {
-                                        selectedRepoIds.insert(repo.id)
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        if selectedRepoIds.contains(repo.id) {
+                                            selectedRepoIds.remove(repo.id)
+                                        } else {
+                                            selectedRepoIds.insert(repo.id)
+                                        }
                                     }
                                 }
                             }
@@ -249,8 +219,6 @@ struct RepoSelectorSheet: View {
             let result = try await apiService.fetchSelectableRepos()
             selectableRepos = result.repos
             deletedCount = result.deletedCount
-
-            // Auto-select all repos by default
             selectedRepoIds = Set(selectableRepos.map { $0.id })
         } catch {
             self.error = error.localizedDescription
@@ -258,166 +226,6 @@ struct RepoSelectorSheet: View {
         isLoading = false
     }
 }
-
-// MARK: - Status Card
-
-struct StatusCard: View {
-    let isActive: Bool
-    let bpm: Int
-    let toolsUnlocked: Bool
-    let threshold: Int
-
-    private var heartRateColor: Color {
-        if bpm == 0 {
-            return .secondary
-        }
-        // Only show green/red based on threshold when workout is active
-        if isActive {
-            return bpm >= threshold ? .green : .red
-        }
-        // Otherwise just show red (heart color) for passive monitoring
-        return .red
-    }
-
-    var body: some View {
-        VStack(spacing: 20) {
-            // Heart rate display
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(bpm)")
-                    .font(.system(size: 72, weight: .bold, design: .rounded))
-                    .foregroundStyle(heartRateColor)
-
-                Text("BPM")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Status indicator (only show during active workout)
-            if isActive {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(toolsUnlocked ? .green : .red)
-                        .frame(width: 12, height: 12)
-
-                    Text(toolsUnlocked ? "Tools Unlocked" : "Tools Locked")
-                        .font(.headline)
-                        .foregroundStyle(toolsUnlocked ? .green : .red)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    Capsule()
-                        .fill(toolsUnlocked ? .green.opacity(0.15) : .red.opacity(0.15))
-                )
-
-                // Threshold indicator
-                Text("Threshold: \(threshold) BPM")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                // Workout status
-                HStack {
-                    Image(systemName: "figure.run")
-                    Text("Workout Active")
-                }
-                .font(.caption)
-                .foregroundStyle(.green)
-            } else {
-                // When not active, show instruction
-                Text("Start a workout to gate your repos")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(32)
-        .background(
-            RoundedRectangle(cornerRadius: 24)
-                .fill(.ultraThinMaterial)
-        )
-    }
-}
-
-// MARK: - Watch Status
-
-struct WatchStatusView: View {
-    @EnvironmentObject var watchConnectivity: WatchConnectivityService
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "applewatch")
-                .font(.title2)
-                .foregroundStyle(watchConnectivity.isReachable ? .green : .secondary)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(watchConnectivity.isWatchAppInstalled ? "Apple Watch" : "Watch Not Found")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                Text(watchConnectivity.isReachable ? "Connected" : "Not Connected")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if let lastBPM = watchConnectivity.lastReceivedBPM {
-                Text("\(lastBPM)")
-                    .font(.headline)
-                    .foregroundStyle(.red)
-            }
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.ultraThinMaterial)
-        )
-    }
-}
-
-// MARK: - Debug HR Simulator View
-
-#if DEBUG
-struct DebugHRSimulatorView: View {
-    @EnvironmentObject var workoutService: WorkoutService
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "heart.text.square")
-                .font(.title2)
-                .foregroundStyle(workoutService.isSimulatingHR ? .pink : .secondary)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("HR Simulator")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                Text(workoutService.isSimulatingHR ? "Generating fake HR data" : "Tap to simulate heart rate")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            Toggle("", isOn: Binding(
-                get: { workoutService.isSimulatingHR },
-                set: { _ in workoutService.toggleHRSimulator() }
-            ))
-            .labelsHidden()
-            .tint(.pink)
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.pink.opacity(0.1))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(.pink.opacity(0.3), lineWidth: 1)
-                )
-        )
-    }
-}
-#endif
 
 #Preview {
     WorkoutView()
