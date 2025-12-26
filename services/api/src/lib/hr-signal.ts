@@ -4,7 +4,7 @@
  * Updates GitHub refs for gate repos when HR samples arrive.
  */
 
-import { prisma } from '@vibeworkout/db';
+import { prisma, type GateRepo } from '@vibeworkout/db';
 import { createSignedPayload } from '@vibeworkout/shared';
 import { config } from '../config.js';
 import { createInstallationOctokit, updateSignalRef } from './github.js';
@@ -64,7 +64,7 @@ export async function updateSessionSignalRefs(
 
     // Update all repos in parallel
     const results = await Promise.allSettled(
-      gateRepos.map(async (repo) => {
+      gateRepos.map(async (repo: GateRepo) => {
         console.log(`[HR Signal] Updating ${repo.owner}/${repo.name}...`);
         const octokit = await createInstallationOctokit(repo.githubAppInstallationId!);
         await updateSignalRef(octokit, repo.owner, repo.name, repo.signalRef, payloadJson);
@@ -73,11 +73,11 @@ export async function updateSessionSignalRefs(
     );
 
     // Log results
-    const anySuccess = results.some((r) => r.status === 'fulfilled');
+    const anySuccess = results.some((r: PromiseSettledResult<void>) => r.status === 'fulfilled');
     console.log(`[HR Signal] Results: ${results.length} total, anySuccess=${anySuccess}`);
 
     // Log failures
-    results.forEach((result, i) => {
+    results.forEach((result: PromiseSettledResult<void>, i: number) => {
       if (result.status === 'rejected') {
         console.error(
           `[HR Signal] FAILED ${gateRepos[i].owner}/${gateRepos[i].name}:`,

@@ -35,7 +35,7 @@ workout.post('/start', async (c) => {
     // Clear activeSessionId from repos of old sessions
     await prisma.gateRepo.updateMany({
       where: {
-        activeSessionId: { in: existingSessions.map((s) => s.id) },
+        activeSessionId: { in: existingSessions.map((s: { id: string }) => s.id) },
       },
       data: { activeSessionId: null },
     });
@@ -111,12 +111,12 @@ workout.post('/stop', async (c) => {
   // Get repos that were active during these sessions BEFORE clearing activeSessionId
   console.log(
     '[stop] Looking for repos with activeSessionId in:',
-    activeSessions.map((s) => s.id)
+    activeSessions.map((s: { id: string; startedAt: Date }) => s.id)
   );
 
   const activeRepos = await prisma.gateRepo.findMany({
     where: {
-      activeSessionId: { in: activeSessions.map((s) => s.id) },
+      activeSessionId: { in: activeSessions.map((s: { id: string; startedAt: Date }) => s.id) },
       githubAppInstallationId: { not: null },
     },
     select: {
@@ -133,7 +133,7 @@ workout.post('/stop', async (c) => {
   // Clear activeSessionId from repos
   await prisma.gateRepo.updateMany({
     where: {
-      activeSessionId: { in: activeSessions.map((s) => s.id) },
+      activeSessionId: { in: activeSessions.map((s: { id: string; startedAt: Date }) => s.id) },
     },
     data: { activeSessionId: null },
   });
@@ -169,7 +169,9 @@ workout.post('/stop', async (c) => {
     );
     if (!repo.githubAppInstallationId || !repo.activeSessionId) continue;
 
-    const session = activeSessions.find((s) => s.id === repo.activeSessionId);
+    const session = activeSessions.find(
+      (s: { id: string; startedAt: Date }) => s.id === repo.activeSessionId
+    );
     if (!session) {
       console.log('[stop] No session found for repo');
       continue;
@@ -406,7 +408,7 @@ workout.post('/stop', async (c) => {
       continue;
     }
 
-    const bpms = samples.map((s) => s.bpm);
+    const bpms = samples.map((s: { bpm: number; ts: Date }) => s.bpm);
     const startTs = samples[0].ts.getTime();
     const endTs = samples[samples.length - 1].ts.getTime();
     const durationSecs = Math.round((endTs - startTs) / 1000);
@@ -427,7 +429,7 @@ workout.post('/stop', async (c) => {
       data: {
         sessionId: session.id,
         durationSecs,
-        avgBpm: Math.round(bpms.reduce((a, b) => a + b, 0) / bpms.length),
+        avgBpm: Math.round(bpms.reduce((a: number, b: number) => a + b, 0) / bpms.length),
         maxBpm: Math.max(...bpms),
         minBpm: Math.min(...bpms),
         timeAboveThresholdSecs: Math.round(timeAbove),
@@ -441,7 +443,7 @@ workout.post('/stop', async (c) => {
   return c.json({
     stopped: true,
     sessions_ended: result.count,
-    session_ids: activeSessions.map((s) => s.id),
+    session_ids: activeSessions.map((s: { id: string; startedAt: Date }) => s.id),
   });
 });
 
@@ -593,7 +595,7 @@ workout.get('/history', async (c) => {
   });
 
   return c.json({
-    samples: samples.map((s) => ({
+    samples: samples.map((s: { bpm: number; ts: Date; source: string }) => ({
       bpm: s.bpm,
       ts: s.ts.toISOString(),
       source: s.source,
@@ -630,9 +632,9 @@ workout.get('/sessions', async (c) => {
   const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
 
   // Fetch sparkline data for each session (sampled BPMs)
-  const sessionIds = items.map((s) => s.id);
+  const sessionIds = items.map((s: (typeof items)[number]) => s.id);
   const sparklineData = await Promise.all(
-    sessionIds.map(async (sessionId) => {
+    sessionIds.map(async (sessionId: string) => {
       const samples = await prisma.hrSample.findMany({
         where: { sessionId },
         orderBy: { ts: 'asc' },
@@ -641,7 +643,7 @@ workout.get('/sessions', async (c) => {
 
       // Downsample to ~20 points for sparkline
       if (samples.length <= 20) {
-        return { sessionId, bpms: samples.map((s) => s.bpm) };
+        return { sessionId, bpms: samples.map((s: { bpm: number }) => s.bpm) };
       }
 
       const step = Math.floor(samples.length / 20);
@@ -657,10 +659,32 @@ workout.get('/sessions', async (c) => {
   const sparklineMap = new Map(sparklineData.map((s) => [s.sessionId, s.bpms]));
 
   return c.json({
-    sessions: items.map((s) => {
+    sessions: items.map((s: (typeof items)[number]) => {
       // Aggregate commit stats
-      const totalLinesAdded = s.commits.reduce((sum, c) => sum + (c.linesAdded ?? 0), 0);
-      const totalLinesRemoved = s.commits.reduce((sum, c) => sum + (c.linesRemoved ?? 0), 0);
+      const totalLinesAdded = s.commits.reduce(
+        (
+          sum: number,
+          c: {
+            linesAdded: number | null;
+            linesRemoved: number | null;
+            repoOwner: string;
+            repoName: string;
+          }
+        ) => sum + (c.linesAdded ?? 0),
+        0
+      );
+      const totalLinesRemoved = s.commits.reduce(
+        (
+          sum: number,
+          c: {
+            linesAdded: number | null;
+            linesRemoved: number | null;
+            repoOwner: string;
+            repoName: string;
+          }
+        ) => sum + (c.linesRemoved ?? 0),
+        0
+      );
 
       // Get unique repo names and find top repo
       const repoCommitCounts = new Map<string, number>();
@@ -750,7 +774,7 @@ workout.get('/sessions/:sessionId', async (c) => {
           total_samples: session.summary.totalSamples,
         }
       : null,
-    commits: session.commits.map((c) => ({
+    commits: session.commits.map((c: (typeof session.commits)[number]) => ({
       id: c.id,
       repo_owner: c.repoOwner,
       repo_name: c.repoName,
@@ -760,7 +784,7 @@ workout.get('/sessions/:sessionId', async (c) => {
       lines_removed: c.linesRemoved,
       committed_at: c.committedAt.toISOString(),
     })),
-    pull_requests: session.pullRequests.map((pr) => ({
+    pull_requests: session.pullRequests.map((pr: (typeof session.pullRequests)[number]) => ({
       id: pr.id,
       repo_owner: pr.repoOwner,
       repo_name: pr.repoName,
@@ -798,7 +822,7 @@ workout.get('/sessions/:sessionId/samples', async (c) => {
   });
 
   return c.json({
-    samples: samples.map((s) => ({
+    samples: samples.map((s: { bpm: number; ts: Date }) => ({
       bpm: s.bpm,
       ts: s.ts.toISOString(),
     })),
@@ -826,7 +850,7 @@ workout.get('/sessions/:sessionId/buckets', async (c) => {
   });
 
   return c.json({
-    buckets: buckets.map((b) => ({
+    buckets: buckets.map((b: (typeof buckets)[number]) => ({
       bucket_start: b.bucketStart.toISOString(),
       bucket_end: b.bucketEnd.toISOString(),
       min_bpm: b.minBpm,
@@ -904,8 +928,14 @@ workout.get('/sessions/:sessionId/post-summary', async (c) => {
 
   const repoBreakdown = Array.from(repoMap.values()).sort((a, b) => b.commitCount - a.commitCount);
 
-  const totalLinesAdded = session.commits.reduce((sum, c) => sum + (c.linesAdded ?? 0), 0);
-  const totalLinesRemoved = session.commits.reduce((sum, c) => sum + (c.linesRemoved ?? 0), 0);
+  const totalLinesAdded = session.commits.reduce(
+    (sum: number, c: (typeof session.commits)[number]) => sum + (c.linesAdded ?? 0),
+    0
+  );
+  const totalLinesRemoved = session.commits.reduce(
+    (sum: number, c: (typeof session.commits)[number]) => sum + (c.linesRemoved ?? 0),
+    0
+  );
 
   return c.json({
     session: {
@@ -926,7 +956,7 @@ workout.get('/sessions/:sessionId/post-summary', async (c) => {
             total_samples: session.summary.totalSamples,
           }
         : null,
-      commits: session.commits.map((c) => ({
+      commits: session.commits.map((c: (typeof session.commits)[number]) => ({
         id: c.id,
         repo_owner: c.repoOwner,
         repo_name: c.repoName,
@@ -936,7 +966,7 @@ workout.get('/sessions/:sessionId/post-summary', async (c) => {
         lines_removed: c.linesRemoved,
         committed_at: c.committedAt.toISOString(),
       })),
-      pull_requests: session.pullRequests.map((pr) => ({
+      pull_requests: session.pullRequests.map((pr: (typeof session.pullRequests)[number]) => ({
         id: pr.id,
         repo_owner: pr.repoOwner,
         repo_name: pr.repoName,
@@ -950,7 +980,7 @@ workout.get('/sessions/:sessionId/post-summary', async (c) => {
         deletions: pr.deletions,
       })),
     },
-    repo_breakdown: repoBreakdown.map((r) => ({
+    repo_breakdown: repoBreakdown.map((r: (typeof repoBreakdown)[number]) => ({
       owner: r.owner,
       name: r.name,
       commit_count: r.commitCount,

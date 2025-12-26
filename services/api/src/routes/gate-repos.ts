@@ -3,7 +3,7 @@
  */
 
 import { Hono } from 'hono';
-import { prisma } from '@vibeworkout/db';
+import { prisma, type GateRepo } from '@vibeworkout/db';
 import { authMiddleware } from '../middleware/auth.js';
 import { decrypt } from '../lib/encryption.js';
 import {
@@ -325,7 +325,7 @@ gateRepos.get('/', async (c) => {
 
   // If no GitHub token, return repos without verification
   if (!githubToken) {
-    const response: GateRepoResponse[] = repos.map((repo) => ({
+    const response: GateRepoResponse[] = repos.map((repo: GateRepo) => ({
       id: repo.id,
       owner: repo.owner,
       name: repo.name,
@@ -347,7 +347,7 @@ gateRepos.get('/', async (c) => {
   const deletedRepoIds: string[] = [];
 
   await Promise.all(
-    repos.map(async (repo) => {
+    repos.map(async (repo: GateRepo) => {
       try {
         await octokit.rest.repos.get({
           owner: repo.owner,
@@ -397,7 +397,7 @@ gateRepos.get('/', async (c) => {
     });
   }
 
-  const response: GateRepoResponse[] = verifiedRepos.map((repo) => ({
+  const response: GateRepoResponse[] = verifiedRepos.map((repo: GateRepo) => ({
     id: repo.id,
     owner: repo.owner,
     name: repo.name,
@@ -438,7 +438,7 @@ gateRepos.get('/selectable', async (c) => {
   // If no GitHub token, return repos without verification
   if (!githubToken) {
     return c.json({
-      repos: repos.map((repo) => ({
+      repos: repos.map((repo: { id: string; owner: string; name: string }) => ({
         id: repo.id,
         owner: repo.owner,
         name: repo.name,
@@ -455,7 +455,7 @@ gateRepos.get('/selectable', async (c) => {
   const deletedRepoIds: string[] = [];
 
   await Promise.all(
-    repos.map(async (repo) => {
+    repos.map(async (repo: { id: string; owner: string; name: string }) => {
       try {
         await octokit.rest.repos.get({
           owner: repo.owner,
@@ -487,7 +487,7 @@ gateRepos.get('/selectable', async (c) => {
   }
 
   return c.json({
-    repos: verifiedRepos.map((repo) => ({
+    repos: verifiedRepos.map((repo: { id: string; owner: string; name: string }) => ({
       id: repo.id,
       owner: repo.owner,
       name: repo.name,
