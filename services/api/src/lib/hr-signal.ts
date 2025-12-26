@@ -54,6 +54,12 @@ export async function updateSessionSignalRefs(
       // Continue anyway
     }
 
+    // Update timestamp FIRST to prevent concurrent requests from all proceeding
+    // This is optimistic - if GitHub fails, we just skip updates for 5 seconds
+    await prisma.$executeRaw`
+      UPDATE hr_status SET last_signal_ref_update_at = ${now} WHERE user_id = ${userId}
+    `;
+
     // Find gate repos
     const gateRepos = await prisma.gateRepo.findMany({
       where: {
@@ -93,16 +99,9 @@ export async function updateSessionSignalRefs(
       })
     );
 
-    // Update timestamp if any succeeded
+    // Log results
     const anySuccess = results.some((r) => r.status === 'fulfilled');
     console.log(`[HR Signal] Results: ${results.length} total, anySuccess=${anySuccess}`);
-
-    if (anySuccess) {
-      await prisma.$executeRaw`
-        UPDATE hr_status SET last_signal_ref_update_at = ${now} WHERE user_id = ${userId}
-      `;
-      console.log('[HR Signal] Updated debounce timestamp');
-    }
 
     // Log failures
     results.forEach((result, i) => {

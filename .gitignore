@@ -62,3 +62,4 @@ supabase/.temp/
 xcuserdata/
 *.xcworkspace/xcuserdata/
 supabase/.env
+.vercel
