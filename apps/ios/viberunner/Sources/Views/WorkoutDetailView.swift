@@ -57,7 +57,11 @@ struct WorkoutDetailView: View {
 
     private func headerSection(_ session: WorkoutSessionDetail) -> some View {
         VStack(spacing: 8) {
-            if let startDate = ISO8601DateFormatter().date(from: session.startedAt) {
+            if let startDate = {
+                let f = ISO8601DateFormatter()
+                f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                return f.date(from: session.startedAt)
+            }() {
                 Text(dateFormatter.string(from: startDate))
                     .font(.headline)
             }

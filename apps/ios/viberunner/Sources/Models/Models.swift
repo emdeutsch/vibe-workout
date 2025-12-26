@@ -257,12 +257,16 @@ struct WorkoutSessionListItem: Codable, Identifiable {
     }
 
     var startDate: Date? {
-        ISO8601DateFormatter().date(from: startedAt)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: startedAt)
     }
 
     var endDate: Date? {
         guard let ended = endedAt else { return nil }
-        return ISO8601DateFormatter().date(from: ended)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: ended)
     }
 }
 
@@ -292,7 +296,9 @@ struct SessionCommit: Codable, Identifiable {
     }
 
     var commitDate: Date? {
-        ISO8601DateFormatter().date(from: committedAt)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: committedAt)
     }
 }
 
@@ -319,7 +325,9 @@ struct HRSample: Codable, Identifiable {
     var id: String { ts }
 
     var timestamp: Date? {
-        ISO8601DateFormatter().date(from: ts)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: ts)
     }
 }
 
@@ -347,7 +355,9 @@ struct HRBucket: Codable, Identifiable {
     }
 
     var startDate: Date? {
-        ISO8601DateFormatter().date(from: bucketStart)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: bucketStart)
     }
 }
 
