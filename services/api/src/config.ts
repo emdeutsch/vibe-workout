@@ -34,9 +34,6 @@ export const config = {
   githubAppPrivateKey: requireEnv('GITHUB_APP_PRIVATE_KEY'),
   githubAppSlug: optionalEnv('GITHUB_APP_SLUG', 'viberunner-ai'),
 
-  // GitHub Webhook (for commit tracking)
-  githubWebhookSecret: requireEnv('GITHUB_WEBHOOK_SECRET'),
-
   // Viberunner signing keys (Ed25519)
   signerPrivateKey: requireEnv('SIGNER_PRIVATE_KEY'),
   signerPublicKey: requireEnv('SIGNER_PUBLIC_KEY'),

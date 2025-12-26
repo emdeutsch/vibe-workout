@@ -17,7 +17,6 @@ import { profile } from './routes/profile.js';
 import { workout } from './routes/workout.js';
 import { github } from './routes/github.js';
 import { gateRepos } from './routes/gate-repos.js';
-import { webhooks } from './routes/webhooks.js';
 
 const app = new Hono();
 
@@ -46,9 +45,6 @@ app.route('/api/profile', profile);
 app.route('/api/workout', workout);
 app.route('/api/github', github);
 app.route('/api/gate-repos', gateRepos);
-
-// Webhooks (no /api prefix - external services call these directly)
-app.route('/webhooks', webhooks);
 
 // 404 handler
 app.notFound((c) => {

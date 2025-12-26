@@ -7,6 +7,7 @@ import { prisma } from '@viberunner/db';
 import { authMiddleware } from '../middleware/auth.js';
 import { config } from '../config.js';
 import { updateSessionSignalRefs } from '../lib/hr-signal.js';
+import { createInstallationOctokit } from '../lib/github.js';
 import type {
   StartWorkoutRequest,
   StartWorkoutResponse,
@@ -90,15 +91,30 @@ workout.post('/start', async (c) => {
 workout.post('/stop', async (c) => {
   const userId = c.get('userId');
 
-  // Get active sessions to clear their repo selections
+  // Get active sessions with full info (need startedAt for commit filtering)
   const activeSessions = await prisma.workoutSession.findMany({
     where: { userId, active: true },
-    select: { id: true },
+    select: { id: true, startedAt: true },
   });
 
   if (activeSessions.length === 0) {
     return c.json({ error: 'No active workout session' }, 404);
   }
+
+  // Get repos that were active during these sessions BEFORE clearing activeSessionId
+  const activeRepos = await prisma.gateRepo.findMany({
+    where: {
+      activeSessionId: { in: activeSessions.map((s) => s.id) },
+      githubAppInstallationId: { not: null },
+    },
+    select: {
+      id: true,
+      owner: true,
+      name: true,
+      activeSessionId: true,
+      githubAppInstallationId: true,
+    },
+  });
 
   // Clear activeSessionId from repos
   await prisma.gateRepo.updateMany({
@@ -124,6 +140,135 @@ workout.post('/stop', async (c) => {
       expiresAt: new Date(),
     },
   });
+
+  // Fetch commits from GitHub for each repo that was active during a session
+  for (const repo of activeRepos) {
+    if (!repo.githubAppInstallationId || !repo.activeSessionId) continue;
+
+    const session = activeSessions.find((s) => s.id === repo.activeSessionId);
+    if (!session) continue;
+
+    try {
+      const octokit = await createInstallationOctokit(repo.githubAppInstallationId);
+
+      // Fetch commits since session started
+      const { data: commits } = await octokit.rest.repos.listCommits({
+        owner: repo.owner,
+        repo: repo.name,
+        since: session.startedAt.toISOString(),
+        per_page: 100,
+      });
+
+      for (const commit of commits) {
+        // Get commit date and skip if after session end
+        const commitDate = new Date(
+          commit.commit.author?.date || commit.commit.committer?.date || ''
+        );
+        if (isNaN(commitDate.getTime()) || commitDate > endedAt) continue;
+
+        // Fetch full commit for file stats
+        const { data: fullCommit } = await octokit.rest.repos.getCommit({
+          owner: repo.owner,
+          repo: repo.name,
+          ref: commit.sha,
+        });
+
+        // Upsert commit
+        const saved = await prisma.sessionCommit.upsert({
+          where: {
+            sessionId_commitSha: {
+              sessionId: session.id,
+              commitSha: commit.sha,
+            },
+          },
+          create: {
+            sessionId: session.id,
+            repoOwner: repo.owner,
+            repoName: repo.name,
+            commitSha: commit.sha,
+            commitMsg: commit.commit.message?.substring(0, 1000) || '',
+            linesAdded: fullCommit.stats?.additions ?? null,
+            linesRemoved: fullCommit.stats?.deletions ?? null,
+            committedAt: commitDate,
+          },
+          update: {},
+        });
+
+        // Save files changed in this commit
+        if (fullCommit.files && fullCommit.files.length > 0) {
+          // Delete existing files for this commit (in case of re-run)
+          await prisma.sessionCommitFile.deleteMany({
+            where: { commitId: saved.id },
+          });
+
+          await prisma.sessionCommitFile.createMany({
+            data: fullCommit.files.map((f) => ({
+              commitId: saved.id,
+              filename: f.filename,
+              status: f.status || 'modified',
+              additions: f.additions ?? null,
+              deletions: f.deletions ?? null,
+            })),
+          });
+        }
+      }
+
+      // Also fetch PRs created or updated during the session
+      const { data: pullRequests } = await octokit.rest.pulls.list({
+        owner: repo.owner,
+        repo: repo.name,
+        state: 'all',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 50,
+      });
+
+      for (const pr of pullRequests) {
+        const prCreatedAt = new Date(pr.created_at);
+        const prUpdatedAt = new Date(pr.updated_at);
+
+        // Include PR if it was created during session OR updated during session
+        const createdDuringSession = prCreatedAt >= session.startedAt && prCreatedAt <= endedAt;
+        const updatedDuringSession = prUpdatedAt >= session.startedAt && prUpdatedAt <= endedAt;
+
+        if (!createdDuringSession && !updatedDuringSession) continue;
+
+        // Determine merged state
+        const state = pr.merged_at ? 'merged' : pr.state;
+
+        await prisma.sessionPullRequest.upsert({
+          where: {
+            sessionId_prNumber_repoOwner_repoName: {
+              sessionId: session.id,
+              prNumber: pr.number,
+              repoOwner: repo.owner,
+              repoName: repo.name,
+            },
+          },
+          create: {
+            sessionId: session.id,
+            repoOwner: repo.owner,
+            repoName: repo.name,
+            prNumber: pr.number,
+            title: pr.title,
+            state,
+            htmlUrl: pr.html_url,
+            createdAt: prCreatedAt,
+            mergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
+            // additions/deletions not available in list endpoint
+          },
+          update: {
+            title: pr.title,
+            state,
+            mergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
+          },
+        });
+      }
+    } catch (error) {
+      // Log but don't fail the stop - commits are nice-to-have
+      console.error(`Failed to fetch commits for ${repo.owner}/${repo.name}:`, error);
+    }
+  }
 
   // Generate WorkoutSummary for each ended session
   const profile = await prisma.profile.findUnique({
