@@ -10,9 +10,6 @@ import { createSignedPayload } from '@viberunner/shared';
 import { config } from '../config.js';
 import { createInstallationOctokit, updateSignalRef } from './github.js';
 
-// Debounce interval in milliseconds (5 seconds)
-const GITHUB_UPDATE_DEBOUNCE_MS = 5000;
-
 /**
  * Update HR signal refs for all gate repos in a session.
  * Debounced: only updates GitHub every 5 seconds to avoid API overload.
@@ -24,41 +21,29 @@ export async function updateSessionSignalRefs(
   bpm: number,
   thresholdBpm: number
 ): Promise<void> {
-  const now = new Date();
-
   try {
-    // Check debounce using raw SQL
+    // Atomic debounce: UPDATE only succeeds if enough time has passed
+    // This prevents race conditions where multiple concurrent requests all pass the check
+    let updated = 0;
     try {
-      const result = await prisma.$queryRaw<
-        Array<{ last_signal_ref_update_at: string | Date | null }>
-      >`
-        SELECT last_signal_ref_update_at FROM hr_status WHERE user_id = ${userId} LIMIT 1
+      // Use Prisma.sql for raw SQL with literal interval
+      updated = await prisma.$executeRaw`
+        UPDATE hr_status
+        SET last_signal_ref_update_at = NOW()
+        WHERE user_id = ${userId}
+          AND (last_signal_ref_update_at IS NULL
+               OR last_signal_ref_update_at < NOW() - INTERVAL '5 seconds')
       `;
-      const rawValue = result[0]?.last_signal_ref_update_at;
-      if (rawValue) {
-        // Parse date from string if needed
-        const lastUpdate = rawValue instanceof Date ? rawValue : new Date(rawValue);
-        const timeSinceLastUpdate = now.getTime() - lastUpdate.getTime();
-        console.log(
-          `[HR Signal] Debounce: lastUpdate=${lastUpdate.toISOString()}, timeSince=${timeSinceLastUpdate}ms`
-        );
-        if (timeSinceLastUpdate < GITHUB_UPDATE_DEBOUNCE_MS) {
-          console.log('[HR Signal] Skipping (debounced)');
-          return;
-        }
-      } else {
-        console.log('[HR Signal] No previous update timestamp, proceeding');
-      }
-    } catch (debounceErr) {
-      console.error('[HR Signal] Debounce check failed:', debounceErr);
-      // Continue anyway
+    } catch (err) {
+      console.error('[HR Signal] Atomic debounce failed:', err);
+      return;
     }
 
-    // Update timestamp FIRST to prevent concurrent requests from all proceeding
-    // This is optimistic - if GitHub fails, we just skip updates for 5 seconds
-    await prisma.$executeRaw`
-      UPDATE hr_status SET last_signal_ref_update_at = ${now} WHERE user_id = ${userId}
-    `;
+    if (updated === 0) {
+      console.log('[HR Signal] Skipping (debounced atomically)');
+      return;
+    }
+    console.log('[HR Signal] Acquired update lock');
 
     // Find gate repos
     const gateRepos = await prisma.gateRepo.findMany({
