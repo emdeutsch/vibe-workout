@@ -193,13 +193,12 @@ github.get('/repos', authMiddleware, async (c) => {
   }
 });
 
-// DEBUG: Test GitHub App installation and commit fetching
-github.get('/debug-commits/:repoId', authMiddleware, async (c) => {
-  const userId = c.get('userId');
+// DEBUG: Test GitHub App installation and commit fetching (temporarily public for testing)
+github.get('/debug-commits/:repoId', async (c) => {
   const repoId = c.req.param('repoId');
 
   const repo = await prisma.gateRepo.findFirst({
-    where: { id: repoId, userId },
+    where: { id: repoId },
   });
 
   if (!repo) {
