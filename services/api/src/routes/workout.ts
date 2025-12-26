@@ -58,9 +58,11 @@ workout.post('/start', async (c) => {
 
   // Activate selected repos for this session
   let selectedRepos: Array<{ id: string; owner: string; name: string }> = [];
+  console.log('[start] Received repo_ids:', body.repo_ids);
+
   if (body.repo_ids && body.repo_ids.length > 0) {
     // Update repos to be active for this session
-    await prisma.gateRepo.updateMany({
+    const updateResult = await prisma.gateRepo.updateMany({
       where: {
         id: { in: body.repo_ids },
         userId, // Ensure user owns these repos
@@ -70,12 +72,17 @@ workout.post('/start', async (c) => {
       data: { activeSessionId: session.id },
     });
 
+    console.log('[start] Updated repos count:', updateResult.count);
+
     // Fetch the repos that were activated
     const repos = await prisma.gateRepo.findMany({
       where: { activeSessionId: session.id },
-      select: { id: true, owner: true, name: true },
+      select: { id: true, owner: true, name: true, githubAppInstallationId: true },
     });
+    console.log('[start] Activated repos:', JSON.stringify(repos));
     selectedRepos = repos;
+  } else {
+    console.log('[start] No repo_ids provided in request');
   }
 
   const response: StartWorkoutResponse = {
@@ -102,6 +109,11 @@ workout.post('/stop', async (c) => {
   }
 
   // Get repos that were active during these sessions BEFORE clearing activeSessionId
+  console.log(
+    '[stop] Looking for repos with activeSessionId in:',
+    activeSessions.map((s) => s.id)
+  );
+
   const activeRepos = await prisma.gateRepo.findMany({
     where: {
       activeSessionId: { in: activeSessions.map((s) => s.id) },
@@ -115,6 +127,8 @@ workout.post('/stop', async (c) => {
       githubAppInstallationId: true,
     },
   });
+
+  console.log('[stop] Found activeRepos:', JSON.stringify(activeRepos));
 
   // Clear activeSessionId from repos
   await prisma.gateRepo.updateMany({
@@ -180,11 +194,43 @@ workout.post('/stop', async (c) => {
 
       console.log('[stop] Events fetched from GitHub:', events.length);
 
+      // Log all PushEvents for debugging
+      const allPushEvents = events.filter((e) => e.type === 'PushEvent');
+      console.log('[stop] All PushEvents:', allPushEvents.length);
+      allPushEvents.forEach((e) => {
+        const payload = e.payload as {
+          ref?: string;
+          commits?: Array<{ sha: string; message: string }>;
+        };
+        console.log(
+          '[stop] PushEvent:',
+          e.created_at,
+          'ref:',
+          payload.ref,
+          'commits:',
+          payload.commits?.length
+        );
+      });
+
       // Filter to PushEvents within our time window
+      // Add 5 minute buffer on each end to account for clock skew and API delays
+      const windowStart = new Date(session.startedAt.getTime() - 5 * 60 * 1000);
+      const windowEnd = new Date(endedAt.getTime() + 5 * 60 * 1000);
+      console.log(
+        '[stop] Time window (with 5min buffer):',
+        windowStart.toISOString(),
+        '-',
+        windowEnd.toISOString()
+      );
+
       const pushEvents = events.filter((e) => {
         if (e.type !== 'PushEvent') return false;
         const eventDate = new Date(e.created_at || '');
-        return eventDate >= session.startedAt && eventDate <= endedAt;
+        const inWindow = eventDate >= windowStart && eventDate <= windowEnd;
+        if (!inWindow) {
+          console.log('[stop] PushEvent outside window:', e.created_at);
+        }
+        return inWindow;
       });
 
       console.log('[stop] PushEvents in time window:', pushEvents.length);
