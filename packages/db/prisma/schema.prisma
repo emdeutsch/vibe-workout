@@ -75,13 +75,14 @@ model HrSample {
 
 // Current HR status (derived, used for quick lookups)
 model HrStatus {
-  id           String   @id @default(uuid())
-  userId       String   @unique @map("user_id")
-  bpm          Int
-  thresholdBpm Int      @map("threshold_bpm")
-  hrOk         Boolean  @map("hr_ok")
-  expiresAt    DateTime @map("expires_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id                    String    @id @default(uuid())
+  userId                String    @unique @map("user_id")
+  bpm                   Int
+  thresholdBpm          Int       @map("threshold_bpm")
+  hrOk                  Boolean   @map("hr_ok")
+  expiresAt             DateTime  @map("expires_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  lastSignalRefUpdateAt DateTime? @map("last_signal_ref_update_at") // Debounce GitHub updates
 
   profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
