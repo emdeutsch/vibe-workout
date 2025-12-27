@@ -298,11 +298,13 @@ export function generatePostToolScript(): string {
 #
 # This script runs after a tool executes successfully.
 # It logs the outcome with type: "outcome" and succeeded: true
+# It also periodically syncs stats to GitHub (every 10 entries)
 #
 
 SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 STATS_LOG="$REPO_ROOT/.git/vibeworkout-stats.jsonl"
+SYNC_THRESHOLD=10
 
 # Read stdin JSON from Claude Code (contains tool_use_id, tool_name, etc.)
 STDIN_JSON=$(cat)
@@ -322,6 +324,15 @@ LOG_ENTRY="\$LOG_ENTRY,\\"tool\\":\\"\$TOOL_NAME\\",\\"succeeded\\":true}"
 
 # Append to local stats log
 echo "\$LOG_ENTRY" >> "$STATS_LOG" 2>/dev/null || true
+
+# Periodically sync stats to GitHub (every N entries)
+# Run in background to avoid blocking tool execution
+if [[ -f "$STATS_LOG" ]]; then
+  LINE_COUNT=$(wc -l < "$STATS_LOG" 2>/dev/null | tr -d ' ')
+  if [[ "$LINE_COUNT" -ge "$SYNC_THRESHOLD" ]]; then
+    "$SCRIPT_DIR/vibeworkout-stats-sync" &>/dev/null &
+  fi
+fi
 
 exit 0
 `;
