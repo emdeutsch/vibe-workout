@@ -64,53 +64,25 @@ export function generateClaudeSettings(): string {
 /**
  * Generate CLAUDE.md content
  */
-export function generateClaudeMd(config: BootstrapConfig): string {
-  const signalRef = `refs/vibeworkout/hr/${config.userKey}`;
+export function generateClaudeMd(_config: BootstrapConfig): string {
+  return `# Project Instructions
 
-  return `# vibeworkout HR-Gated Repository
+<!--
+  Add your project-specific instructions below.
+  DO NOT delete the vibeworkout section at the bottom.
+-->
 
-This repository is protected by vibeworkout. Claude Code tool calls (edit, write, bash, etc.) are gated by the user's live heart rate.
 
-## How it works
 
-- You can **chat anytime** without restrictions
-- **Tool calls are blocked** unless the user's heart rate is above their configured threshold
-- When tools are locked, you'll see: \`vibeworkout: HR below threshold — tools locked\`
+<!-- ====== VIBEWORKOUT - DO NOT DELETE ====== -->
 
-## When tools are locked
+## vibeworkout HR-Gating
 
-Switch to **planning and review mode**:
-- Discuss architecture and design decisions
-- Review code and suggest improvements
-- Plan implementation steps
-- Answer questions about the codebase
-- **Don't spam tool calls** — wait for the user to get their HR up!
+This repo is HR-gated. Tool calls are blocked unless the user's heart rate is above threshold.
 
-## Configuration
+**When tools are locked:** Focus on planning, review, and discussion. Don't retry blocked tools — wait for the user to get their HR up.
 
-- User key: \`${config.userKey}\`
-- Signal ref: \`${signalRef}\`
-- Public key version: 1
-
-## Tool tracking
-
-Tool attempts are logged locally and synced to GitHub when you push code. To manually sync stats:
-
-\`\`\`bash
-./scripts/vibeworkout-stats-sync
-\`\`\`
-
-**After pushing commits**, run the sync script to upload tool attempt data for your workout summary.
-
-## How to disable
-
-To temporarily disable HR gating:
-1. Remove or rename the \`.claude/settings.json\` file
-2. Tool calls will work normally until you restore the file
-
-## Learn more
-
-Visit [vibeworkout](https://github.com/evandeutsch/vibe-workout) for documentation and support.
+**To disable:** Remove \`.claude/settings.json\`
 `;
 }
 
