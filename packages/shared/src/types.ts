@@ -155,23 +155,42 @@ export interface GitHubOAuthCallbackRequest {
 // Tool attempt tracking types
 export interface ToolAttemptEntry {
   ts: string;
+  type: 'attempt' | 'outcome';
+  tool_use_id?: string;
   tool: string;
-  allowed: boolean;
-  session_id: string;
-  bpm: number;
+  allowed?: boolean;
+  reason?: string;
+  succeeded?: boolean;
+  session_id?: string;
+  bpm?: number;
 }
+
+// Block reasons for tool attempts
+export type ToolBlockReason =
+  | 'hr_below_threshold'
+  | 'signal_expired'
+  | 'signal_fetch_failed'
+  | 'invalid_signature'
+  | 'config_missing'
+  | 'payload_malformed'
+  | 'user_key_mismatch';
 
 export interface ToolStatsResponse {
   total_attempts: number;
   allowed: number;
   blocked: number;
-  by_tool: Record<string, { allowed: number; blocked: number }>;
+  succeeded: number;
+  by_tool: Record<string, { allowed: number; blocked: number; succeeded: number }>;
+  by_reason: Record<string, number>;
 }
 
 export interface ToolAttemptResponse {
   id: string;
   tool_name: string;
+  tool_use_id: string | null;
   allowed: boolean;
+  reason: string | null;
+  succeeded: boolean | null;
   bpm: number | null;
   timestamp: string;
 }

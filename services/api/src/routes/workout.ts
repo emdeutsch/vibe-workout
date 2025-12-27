@@ -402,17 +402,26 @@ workout.post('/stop', async (c) => {
           const statsContent = Buffer.from(statsBlob.content, 'base64').toString('utf-8');
           const statsLines = statsContent.trim().split('\n').filter(Boolean);
 
-          console.log('[stop] Found', statsLines.length, 'tool attempt entries');
+          console.log('[stop] Found', statsLines.length, 'tool stats entries');
 
+          // First pass: process attempt entries
           for (const line of statsLines) {
             try {
               const entry = JSON.parse(line) as {
                 ts: string;
+                type?: 'attempt' | 'outcome';
+                tool_use_id?: string;
                 tool: string;
-                allowed: boolean;
-                session_id: string;
-                bpm: number;
+                allowed?: boolean;
+                reason?: string;
+                succeeded?: boolean;
+                session_id?: string;
+                bpm?: number;
               };
+
+              // Skip outcome entries in first pass
+              if (entry.type === 'outcome') continue;
+
               const timestamp = new Date(entry.ts);
 
               // Filter to this session's time window
@@ -432,14 +441,56 @@ workout.post('/stop', async (c) => {
                 create: {
                   sessionId: session.id,
                   toolName: entry.tool,
-                  allowed: entry.allowed,
-                  bpm: entry.bpm,
+                  toolUseId: entry.tool_use_id ?? null,
+                  allowed: entry.allowed ?? false,
+                  reason: entry.reason ?? null,
+                  bpm: entry.bpm ?? null,
                   timestamp,
                 },
-                update: {},
+                update: {
+                  // Update if we have new data (e.g., tool_use_id)
+                  toolUseId: entry.tool_use_id ?? undefined,
+                  reason: entry.reason ?? undefined,
+                },
               });
             } catch (parseError) {
               console.error('[stop] Failed to parse tool stats line:', parseError);
+            }
+          }
+
+          // Second pass: process outcome entries to update succeeded field
+          for (const line of statsLines) {
+            try {
+              const entry = JSON.parse(line) as {
+                ts: string;
+                type?: 'attempt' | 'outcome';
+                tool_use_id?: string;
+                tool: string;
+                succeeded?: boolean;
+              };
+
+              // Only process outcome entries
+              if (entry.type !== 'outcome') continue;
+
+              const timestamp = new Date(entry.ts);
+
+              // Filter to this session's time window
+              if (timestamp < windowStart || timestamp > windowEnd) continue;
+
+              // Match by tool_use_id if available
+              if (entry.tool_use_id) {
+                await prisma.toolAttempt.updateMany({
+                  where: {
+                    sessionId: session.id,
+                    toolUseId: entry.tool_use_id,
+                  },
+                  data: {
+                    succeeded: entry.succeeded ?? true,
+                  },
+                });
+              }
+            } catch (parseError) {
+              console.error('[stop] Failed to parse tool outcome line:', parseError);
             }
           }
         }
@@ -847,17 +898,25 @@ workout.get('/sessions/:sessionId', async (c) => {
     total_attempts: session.toolAttempts.length,
     allowed: session.toolAttempts.filter((t: { allowed: boolean }) => t.allowed).length,
     blocked: session.toolAttempts.filter((t: { allowed: boolean }) => !t.allowed).length,
-    by_tool: {} as Record<string, { allowed: number; blocked: number }>,
+    succeeded: session.toolAttempts.filter((t: { succeeded: boolean | null }) => t.succeeded === true).length,
+    by_tool: {} as Record<string, { allowed: number; blocked: number; succeeded: number }>,
+    by_reason: {} as Record<string, number>,
   };
 
   for (const attempt of session.toolAttempts) {
     if (!toolStats.by_tool[attempt.toolName]) {
-      toolStats.by_tool[attempt.toolName] = { allowed: 0, blocked: 0 };
+      toolStats.by_tool[attempt.toolName] = { allowed: 0, blocked: 0, succeeded: 0 };
     }
     if (attempt.allowed) {
       toolStats.by_tool[attempt.toolName].allowed++;
+      if (attempt.succeeded === true) {
+        toolStats.by_tool[attempt.toolName].succeeded++;
+      }
     } else {
       toolStats.by_tool[attempt.toolName].blocked++;
+      if (attempt.reason) {
+        toolStats.by_reason[attempt.reason] = (toolStats.by_reason[attempt.reason] ?? 0) + 1;
+      }
     }
   }
 
@@ -999,17 +1058,25 @@ workout.get('/sessions/:sessionId/post-summary', async (c) => {
     total_attempts: session.toolAttempts.length,
     allowed: session.toolAttempts.filter((t: { allowed: boolean }) => t.allowed).length,
     blocked: session.toolAttempts.filter((t: { allowed: boolean }) => !t.allowed).length,
-    by_tool: {} as Record<string, { allowed: number; blocked: number }>,
+    succeeded: session.toolAttempts.filter((t: { succeeded: boolean | null }) => t.succeeded === true).length,
+    by_tool: {} as Record<string, { allowed: number; blocked: number; succeeded: number }>,
+    by_reason: {} as Record<string, number>,
   };
 
   for (const attempt of session.toolAttempts) {
     if (!toolStats.by_tool[attempt.toolName]) {
-      toolStats.by_tool[attempt.toolName] = { allowed: 0, blocked: 0 };
+      toolStats.by_tool[attempt.toolName] = { allowed: 0, blocked: 0, succeeded: 0 };
     }
     if (attempt.allowed) {
       toolStats.by_tool[attempt.toolName].allowed++;
+      if (attempt.succeeded === true) {
+        toolStats.by_tool[attempt.toolName].succeeded++;
+      }
     } else {
       toolStats.by_tool[attempt.toolName].blocked++;
+      if (attempt.reason) {
+        toolStats.by_reason[attempt.reason] = (toolStats.by_reason[attempt.reason] ?? 0) + 1;
+      }
     }
   }
 

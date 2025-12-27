@@ -251,7 +251,10 @@ model ToolAttempt {
   id        String   @id @default(uuid())
   sessionId String   @map("session_id")
   toolName  String   @map("tool_name")
+  toolUseId String?  @map("tool_use_id")
   allowed   Boolean
+  reason    String?  // Block reason: hr_below_threshold, signal_expired, etc.
+  succeeded Boolean? // null if blocked, true/false if allowed
   bpm       Int?
   timestamp DateTime
   createdAt DateTime @default(now()) @map("created_at")
@@ -261,6 +264,7 @@ model ToolAttempt {
   @@unique([sessionId, timestamp, toolName])
   @@index([sessionId])
   @@index([sessionId, timestamp])
+  @@index([toolUseId])
   @@map("tool_attempts")
   @@schema("public")
 }
