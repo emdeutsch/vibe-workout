@@ -8,9 +8,9 @@ struct MainTabView: View {
                     Label("Workout", systemImage: "heart.fill")
                 }
 
-            HistoryView()
+            ActivityView()
                 .tabItem {
-                    Label("History", systemImage: "clock.arrow.circlepath")
+                    Label("Activity", systemImage: "chart.bar.fill")
                 }
 
             GateReposView()

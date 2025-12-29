@@ -162,6 +162,38 @@ class APIService: ObservableObject {
         _ = try await makeRequest(path: "api/workout/sessions/\(sessionId)", method: "DELETE")
     }
 
+    // MARK: - Aggregated Stats
+
+    func fetchOverviewStats(period: TimePeriod = .month) async throws -> OverviewStats {
+        let data = try await makeRequest(path: "api/workout/stats/overview?period=\(period.rawValue)")
+        return try decode(OverviewStats.self, from: data)
+    }
+
+    func fetchProjects(period: TimePeriod = .all, sort: String = "recent", limit: Int = 20, cursor: String? = nil) async throws -> ProjectsListResponse {
+        var path = "api/workout/stats/projects?period=\(period.rawValue)&sort=\(sort)&limit=\(limit)"
+        if let cursor = cursor {
+            path += "&cursor=\(cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cursor)"
+        }
+        let data = try await makeRequest(path: path)
+        return try decode(ProjectsListResponse.self, from: data)
+    }
+
+    func fetchProjectDetail(repoFullName: String, period: TimePeriod = .all) async throws -> ProjectDetail {
+        let encodedName = repoFullName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? repoFullName
+        let data = try await makeRequest(path: "api/workout/stats/projects/\(encodedName)?period=\(period.rawValue)")
+        return try decode(ProjectDetail.self, from: data)
+    }
+
+    func fetchProjectSessions(repoFullName: String, limit: Int = 20, cursor: String? = nil) async throws -> ProjectSessionsResponse {
+        let encodedName = repoFullName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? repoFullName
+        var path = "api/workout/stats/projects/\(encodedName)/sessions?limit=\(limit)"
+        if let cursor = cursor {
+            path += "&cursor=\(cursor)"
+        }
+        let data = try await makeRequest(path: path)
+        return try decode(ProjectSessionsResponse.self, from: data)
+    }
+
     // MARK: - GitHub
 
     /// Sync GitHub provider token from Supabase OAuth to backend

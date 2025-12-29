@@ -152,13 +152,66 @@ export interface GitHubOAuthCallbackRequest {
   state: string;
 }
 
+// Tool attempt tracking types
+export interface ToolAttemptEntry {
+  ts: string;
+  type: 'attempt' | 'outcome';
+  tool_use_id?: string;
+  tool: string;
+  allowed?: boolean;
+  gated?: boolean; // false when .vibeworkout-disable is present
+  reason?: string;
+  succeeded?: boolean;
+  session_id?: string;
+  bpm?: number;
+}
+
+// Block reasons for tool attempts
+export type ToolBlockReason =
+  | 'hr_below_threshold'
+  | 'signal_expired'
+  | 'signal_fetch_failed'
+  | 'invalid_signature'
+  | 'config_missing'
+  | 'payload_malformed'
+  | 'user_key_mismatch'
+  | 'gating_disabled';
+
+export interface ToolStatsResponse {
+  total_attempts: number;
+  allowed: number;
+  blocked: number;
+  succeeded: number;
+  ungated: number; // Tool calls made with gating disabled
+  by_tool: Record<string, { allowed: number; blocked: number; succeeded: number }>;
+  by_reason: Record<string, number>;
+}
+
+export interface ToolAttemptResponse {
+  id: string;
+  tool_name: string;
+  tool_use_id: string | null;
+  allowed: boolean;
+  reason: string | null;
+  succeeded: boolean | null;
+  bpm: number | null;
+  timestamp: string;
+}
+
 // Constants
 export const SIGNAL_VERSION = 1;
 export const DEFAULT_TTL_SECONDS = 15;
 export const PAYLOAD_FILENAME = 'hr-signal.json';
 export const SIGNAL_REF_PATTERN = 'refs/vibeworkout/hr/{user_key}';
+export const STATS_REF_PATTERN = 'refs/vibeworkout/stats/{user_key}';
+export const STATS_FILENAME = 'tool-stats.jsonl';
 
 // Helper to build signal ref from user_key
 export function buildSignalRef(userKey: string): string {
   return `refs/vibeworkout/hr/${userKey}`;
+}
+
+// Helper to build stats ref from user_key
+export function buildStatsRef(userKey: string): string {
+  return `refs/vibeworkout/stats/${userKey}`;
 }

@@ -48,6 +48,7 @@ model WorkoutSession {
   summary         WorkoutSummary?
   commits         SessionCommit[]
   pullRequests    SessionPullRequest[]
+  toolAttempts    ToolAttempt[]
   activeGateRepos GateRepo[]           // Repos selected for this workout session
 
   @@index([userId, active])
@@ -242,5 +243,29 @@ model SessionPullRequest {
   @@unique([sessionId, prNumber, repoOwner, repoName])
   @@index([sessionId])
   @@map("session_pull_requests")
+  @@schema("public")
+}
+
+// Tool attempts tracked during workout sessions
+model ToolAttempt {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  toolName  String   @map("tool_name")
+  toolUseId String?  @map("tool_use_id")
+  allowed   Boolean
+  gated     Boolean  @default(true) // false when .vibeworkout-disable is present
+  reason    String?  // Block reason: hr_below_threshold, signal_expired, etc.
+  succeeded Boolean? // null if blocked, true/false if allowed
+  bpm       Int?
+  timestamp DateTime
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session WorkoutSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, timestamp, toolName])
+  @@index([sessionId])
+  @@index([sessionId, timestamp])
+  @@index([toolUseId])
+  @@map("tool_attempts")
   @@schema("public")
 }
