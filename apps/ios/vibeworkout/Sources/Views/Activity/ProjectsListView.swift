@@ -167,70 +167,63 @@ struct ProjectCard: View {
             HStack {
                 Image(systemName: "folder.fill")
                     .foregroundStyle(.blue)
-                Text(project.repoFullName)
-                    .font(.headline)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(project.repoName)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(project.repoOwner)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Text(project.formattedLastActive)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Divider()
-
-            // Stats grid
-            HStack(spacing: Spacing.lg) {
-                // Workout stats
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Workout", systemImage: "heart.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: Spacing.sm) {
-                        MiniStat(icon: "clock", value: project.workout.formattedDuration)
-                        MiniStat(icon: "heart", value: "\(project.workout.avgBpm)")
-                    }
+            // Compact stats row
+            HStack(spacing: Spacing.md) {
+                // Workout
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .foregroundStyle(.red)
+                    Text(project.workout.formattedDuration)
                 }
 
-                Divider()
-
-                // Coding stats
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Code", systemImage: "chevron.left.forwardslash.chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: Spacing.sm) {
-                        MiniStat(icon: "arrow.triangle.branch", value: "\(project.coding.totalCommits)")
-                        Text("+\(project.coding.linesAdded)/-\(project.coding.linesRemoved)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                HStack(spacing: 4) {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                    Text("\(project.workout.avgBpm)")
                 }
-            }
 
-            // Tool stats (if any)
-            if project.tools.totalAttempts > 0 {
-                HStack(spacing: Spacing.sm) {
-                    Image(systemName: "hammer")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                    Text("\(project.tools.totalAttempts) tools")
-                        .font(.caption)
-                    Text("•")
-                        .foregroundStyle(.secondary)
-                    Text("\(project.tools.allowed) allowed")
-                        .font(.caption)
+                Spacer()
+
+                // Coding
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .foregroundStyle(.blue)
+                    Text("\(project.coding.totalCommits)")
+                }
+
+                HStack(spacing: 4) {
+                    Text("+\(formatCompact(project.coding.linesAdded))")
                         .foregroundStyle(.green)
-                    if project.tools.blocked > 0 {
-                        Text("\(project.tools.blocked) blocked")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
+                    Text("-\(formatCompact(project.coding.linesRemoved))")
+                        .foregroundStyle(.red)
                 }
             }
+            .font(.caption)
         }
         .padding(Spacing.md)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+    }
+
+    private func formatCompact(_ value: Int) -> String {
+        if value >= 1000 {
+            return String(format: "%.1fk", Double(value) / 1000)
+        }
+        return "\(value)"
     }
 }
 

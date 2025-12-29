@@ -1,6 +1,15 @@
 import SwiftUI
 import Charts
 
+enum ChartMetric: String, CaseIterable, Identifiable {
+    case duration = "Time"
+    case commits = "Commits"
+    case lines = "Lines"
+    case tools = "Tools"
+
+    var id: String { rawValue }
+}
+
 struct ProjectDetailView: View {
     @EnvironmentObject var apiService: APIService
 
@@ -8,6 +17,7 @@ struct ProjectDetailView: View {
 
     @State private var detail: ProjectDetail?
     @State private var selectedPeriod: TimePeriod = .all
+    @State private var selectedChartMetric: ChartMetric = .commits
     @State private var isLoading = false
     @State private var error: String?
 
@@ -33,7 +43,10 @@ struct ProjectDetailView: View {
                     ToolStatsCard(stats: detail.tools)
 
                     // Activity chart
-                    ProjectChartView(chart: detail.chart)
+                    ProjectChartView(
+                        chart: detail.chart,
+                        selectedMetric: $selectedChartMetric
+                    )
 
                     // Recent sessions
                     if !detail.recentSessions.isEmpty {
@@ -144,11 +157,21 @@ struct ProjectHeaderView: View {
 
 struct ProjectChartView: View {
     let chart: ActivityChartData
+    @Binding var selectedMetric: ChartMetric
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text("Activity")
-                .font(.headline)
+            HStack {
+                Text("Activity")
+                    .font(.headline)
+                Spacer()
+                Picker("Metric", selection: $selectedMetric) {
+                    ForEach(ChartMetric.allCases) { metric in
+                        Text(metric.rawValue).tag(metric)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
 
             if chart.buckets.isEmpty {
                 Text("No activity data")
@@ -160,9 +183,9 @@ struct ProjectChartView: View {
                     ForEach(chart.buckets) { bucket in
                         BarMark(
                             x: .value("Date", bucket.formattedDate),
-                            y: .value("Commits", bucket.commits)
+                            y: .value("Value", valueFor(bucket))
                         )
-                        .foregroundStyle(Color.blue.gradient)
+                        .foregroundStyle(colorForMetric.gradient)
                     }
                 }
                 .frame(height: 120)
@@ -176,6 +199,32 @@ struct ProjectChartView: View {
         .padding(Spacing.md)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: Radius.md))
+    }
+
+    private func valueFor(_ bucket: ActivityBucket) -> Int {
+        switch selectedMetric {
+        case .duration:
+            return bucket.durationSecs / 60 // Show minutes
+        case .commits:
+            return bucket.commits
+        case .lines:
+            return bucket.linesAdded + bucket.linesRemoved
+        case .tools:
+            return bucket.toolCalls ?? 0
+        }
+    }
+
+    private var colorForMetric: Color {
+        switch selectedMetric {
+        case .duration:
+            return .red
+        case .commits:
+            return .blue
+        case .lines:
+            return .green
+        case .tools:
+            return .orange
+        }
     }
 }
 

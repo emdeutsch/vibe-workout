@@ -10,15 +10,6 @@ struct OverviewView: View {
     @State private var isLoading = false
     @State private var error: String?
 
-    enum ChartMetric: String, CaseIterable, Identifiable {
-        case duration = "Time"
-        case commits = "Commits"
-        case lines = "Lines"
-        case tools = "Tools"
-
-        var id: String { rawValue }
-    }
-
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.lg) {
@@ -296,7 +287,7 @@ struct StatItem: View {
 
 struct ActivityChartSection: View {
     let chart: ActivityChartData
-    @Binding var selectedMetric: OverviewView.ChartMetric
+    @Binding var selectedMetric: ChartMetric
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -305,7 +296,7 @@ struct ActivityChartSection: View {
                     .font(.headline)
                 Spacer()
                 Picker("Metric", selection: $selectedMetric) {
-                    ForEach(OverviewView.ChartMetric.allCases) { metric in
+                    ForEach(ChartMetric.allCases) { metric in
                         Text(metric.rawValue).tag(metric)
                     }
                 }
@@ -324,12 +315,12 @@ struct ActivityChartSection: View {
                             x: .value("Date", bucket.formattedDate),
                             y: .value("Value", valueFor(bucket))
                         )
-                        .foregroundStyle(Color.brandPrimary.gradient)
+                        .foregroundStyle(colorForMetric.gradient)
                     }
                 }
                 .frame(height: 150)
                 .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                    AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                         AxisValueLabel()
                     }
                 }
@@ -350,6 +341,19 @@ struct ActivityChartSection: View {
             return bucket.linesAdded + bucket.linesRemoved
         case .tools:
             return bucket.toolCalls ?? 0
+        }
+    }
+
+    private var colorForMetric: Color {
+        switch selectedMetric {
+        case .duration:
+            return .red
+        case .commits:
+            return .blue
+        case .lines:
+            return .green
+        case .tools:
+            return .orange
         }
     }
 }
