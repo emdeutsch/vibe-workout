@@ -1294,4 +1294,773 @@ workout.post('/sessions/:sessionId/commits', async (c) => {
   );
 });
 
+// ============================================================
+// AGGREGATED STATS ENDPOINTS
+// ============================================================
+
+// Helper to calculate period start date
+function getPeriodStart(period: string): Date | null {
+  const now = new Date();
+  switch (period) {
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    case '30d':
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    case '90d':
+      return new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    case '1y':
+      return new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+    case 'all':
+      return null; // No filter
+    default:
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+}
+
+// Get aggregated overview stats
+workout.get('/stats/overview', async (c) => {
+  const userId = c.get('userId');
+  const period = c.req.query('period') || '30d';
+  const periodStart = getPeriodStart(period);
+  const periodEnd = new Date();
+
+  // Build where clause for sessions
+  const sessionWhere: { userId: string; endedAt?: { not: null; gte?: Date } } = {
+    userId,
+    endedAt: { not: null },
+  };
+  if (periodStart) {
+    sessionWhere.endedAt = { not: null, gte: periodStart };
+  }
+
+  // Get sessions with summaries and commits
+  const sessions = await prisma.workoutSession.findMany({
+    where: sessionWhere,
+    include: {
+      summary: true,
+      commits: {
+        select: {
+          linesAdded: true,
+          linesRemoved: true,
+          repoOwner: true,
+          repoName: true,
+        },
+      },
+      pullRequests: {
+        select: {
+          state: true,
+        },
+      },
+      toolAttempts: {
+        select: {
+          allowed: true,
+          succeeded: true,
+          toolName: true,
+        },
+      },
+    },
+  });
+
+  // Aggregate workout stats
+  let totalDurationSecs = 0;
+  let totalBpmSum = 0;
+  let totalBpmCount = 0;
+  let maxBpm = 0;
+  let minBpm = 999;
+  let timeAboveThresholdSecs = 0;
+  let timeBelowThresholdSecs = 0;
+
+  for (const session of sessions) {
+    if (session.summary) {
+      totalDurationSecs += session.summary.durationSecs;
+      if (session.summary.avgBpm > 0) {
+        totalBpmSum += session.summary.avgBpm * session.summary.durationSecs;
+        totalBpmCount += session.summary.durationSecs;
+      }
+      if (session.summary.maxBpm > maxBpm) maxBpm = session.summary.maxBpm;
+      if (session.summary.minBpm > 0 && session.summary.minBpm < minBpm) {
+        minBpm = session.summary.minBpm;
+      }
+      timeAboveThresholdSecs += session.summary.timeAboveThresholdSecs;
+      timeBelowThresholdSecs += session.summary.timeBelowThresholdSecs;
+    }
+  }
+
+  const avgBpm = totalBpmCount > 0 ? Math.round(totalBpmSum / totalBpmCount) : 0;
+  if (minBpm === 999) minBpm = 0;
+
+  // Aggregate coding stats
+  let totalCommits = 0;
+  let linesAdded = 0;
+  let linesRemoved = 0;
+  const repoSet = new Set<string>();
+  let prsOpened = 0;
+  let prsMerged = 0;
+  let prsClosed = 0;
+
+  for (const session of sessions) {
+    totalCommits += session.commits.length;
+    for (const commit of session.commits) {
+      linesAdded += commit.linesAdded ?? 0;
+      linesRemoved += commit.linesRemoved ?? 0;
+      repoSet.add(`${commit.repoOwner}/${commit.repoName}`);
+    }
+    for (const pr of session.pullRequests) {
+      if (pr.state === 'open') prsOpened++;
+      else if (pr.state === 'merged') prsMerged++;
+      else if (pr.state === 'closed') prsClosed++;
+    }
+  }
+
+  // Aggregate tool stats
+  let totalAttempts = 0;
+  let allowed = 0;
+  let blocked = 0;
+  let succeeded = 0;
+  let failed = 0;
+  const toolCounts = new Map<string, number>();
+
+  for (const session of sessions) {
+    for (const attempt of session.toolAttempts) {
+      totalAttempts++;
+      if (attempt.allowed) {
+        allowed++;
+        if (attempt.succeeded === true) succeeded++;
+        else if (attempt.succeeded === false) failed++;
+      } else {
+        blocked++;
+      }
+      toolCounts.set(attempt.toolName, (toolCounts.get(attempt.toolName) ?? 0) + 1);
+    }
+  }
+
+  const topTools = Array.from(toolCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({ name, count }));
+
+  const successRate = allowed > 0 ? Math.round((succeeded / allowed) * 100) / 100 : 0;
+
+  // Build chart data (daily buckets for periods <= 30d, weekly for longer)
+  const useDailyBuckets = period === '7d' || period === '30d';
+  const bucketMs = useDailyBuckets ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+  const buckets: Array<{
+    date: string;
+    durationSecs: number;
+    commits: number;
+    linesAdded: number;
+    linesRemoved: number;
+    toolCalls: number;
+  }> = [];
+
+  // Create empty buckets
+  const chartStart = periodStart ?? new Date(sessions[sessions.length - 1]?.startedAt ?? periodEnd);
+  let bucketDate = new Date(chartStart);
+  bucketDate.setHours(0, 0, 0, 0);
+
+  while (bucketDate <= periodEnd) {
+    buckets.push({
+      date: bucketDate.toISOString().split('T')[0],
+      durationSecs: 0,
+      commits: 0,
+      linesAdded: 0,
+      linesRemoved: 0,
+      toolCalls: 0,
+    });
+    bucketDate = new Date(bucketDate.getTime() + bucketMs);
+  }
+
+  // Fill buckets with session data
+  for (const session of sessions) {
+    if (!session.startedAt) continue;
+    const sessionDate = session.startedAt.toISOString().split('T')[0];
+    const bucket = buckets.find((b) => {
+      if (useDailyBuckets) return b.date === sessionDate;
+      // For weekly, check if session falls within the week
+      const bDate = new Date(b.date);
+      const sDate = new Date(sessionDate);
+      return sDate >= bDate && sDate < new Date(bDate.getTime() + bucketMs);
+    });
+
+    if (bucket) {
+      bucket.durationSecs += session.summary?.durationSecs ?? 0;
+      bucket.commits += session.commits.length;
+      bucket.toolCalls += session.toolAttempts.length;
+      for (const commit of session.commits) {
+        bucket.linesAdded += commit.linesAdded ?? 0;
+        bucket.linesRemoved += commit.linesRemoved ?? 0;
+      }
+    }
+  }
+
+  return c.json({
+    period,
+    periodStart: (periodStart ?? chartStart).toISOString(),
+    periodEnd: periodEnd.toISOString(),
+    workout: {
+      totalDurationSecs,
+      sessionCount: sessions.length,
+      avgBpm,
+      maxBpm,
+      minBpm,
+      timeAboveThresholdSecs,
+      timeBelowThresholdSecs,
+    },
+    coding: {
+      totalCommits,
+      linesAdded,
+      linesRemoved,
+      prsOpened,
+      prsMerged,
+      prsClosed,
+      reposCount: repoSet.size,
+    },
+    tools: {
+      totalAttempts,
+      allowed,
+      blocked,
+      succeeded,
+      failed,
+      successRate,
+      topTools,
+    },
+    chart: { buckets },
+  });
+});
+
+// Get project list with aggregated stats
+workout.get('/stats/projects', async (c) => {
+  const userId = c.get('userId');
+  const period = c.req.query('period') || 'all';
+  const sort = c.req.query('sort') || 'recent';
+  const limit = parseInt(c.req.query('limit') || '20', 10);
+  const cursor = c.req.query('cursor');
+
+  const periodStart = getPeriodStart(period);
+
+  // Build where clause for sessions
+  const sessionWhere: { userId: string; endedAt?: { not: null; gte?: Date } } = {
+    userId,
+    endedAt: { not: null },
+  };
+  if (periodStart) {
+    sessionWhere.endedAt = { not: null, gte: periodStart };
+  }
+
+  // Get all sessions with commits
+  const sessions = await prisma.workoutSession.findMany({
+    where: sessionWhere,
+    include: {
+      summary: true,
+      commits: {
+        select: {
+          repoOwner: true,
+          repoName: true,
+          linesAdded: true,
+          linesRemoved: true,
+        },
+      },
+      pullRequests: {
+        select: {
+          repoOwner: true,
+          repoName: true,
+          state: true,
+        },
+      },
+      toolAttempts: {
+        select: {
+          allowed: true,
+          succeeded: true,
+        },
+      },
+    },
+  });
+
+  // Aggregate by repo
+  const repoStats = new Map<
+    string,
+    {
+      repoOwner: string;
+      repoName: string;
+      lastActiveAt: Date;
+      sessionIds: Set<string>;
+      totalDurationSecs: number;
+      bpmSum: number;
+      bpmCount: number;
+      maxBpm: number;
+      timeAboveThresholdSecs: number;
+      timeBelowThresholdSecs: number;
+      commits: number;
+      linesAdded: number;
+      linesRemoved: number;
+      prsOpened: number;
+      prsMerged: number;
+      prsClosed: number;
+      toolAttempts: number;
+      toolAllowed: number;
+      toolBlocked: number;
+    }
+  >();
+
+  for (const session of sessions) {
+    // Track which repos this session touched
+    const sessionRepos = new Set<string>();
+
+    for (const commit of session.commits) {
+      const key = `${commit.repoOwner}/${commit.repoName}`;
+      sessionRepos.add(key);
+
+      if (!repoStats.has(key)) {
+        repoStats.set(key, {
+          repoOwner: commit.repoOwner,
+          repoName: commit.repoName,
+          lastActiveAt: session.startedAt,
+          sessionIds: new Set(),
+          totalDurationSecs: 0,
+          bpmSum: 0,
+          bpmCount: 0,
+          maxBpm: 0,
+          timeAboveThresholdSecs: 0,
+          timeBelowThresholdSecs: 0,
+          commits: 0,
+          linesAdded: 0,
+          linesRemoved: 0,
+          prsOpened: 0,
+          prsMerged: 0,
+          prsClosed: 0,
+          toolAttempts: 0,
+          toolAllowed: 0,
+          toolBlocked: 0,
+        });
+      }
+
+      const stats = repoStats.get(key)!;
+      stats.commits++;
+      stats.linesAdded += commit.linesAdded ?? 0;
+      stats.linesRemoved += commit.linesRemoved ?? 0;
+
+      if (session.startedAt > stats.lastActiveAt) {
+        stats.lastActiveAt = session.startedAt;
+      }
+    }
+
+    // Add PRs to repo stats
+    for (const pr of session.pullRequests) {
+      const key = `${pr.repoOwner}/${pr.repoName}`;
+      sessionRepos.add(key);
+
+      if (!repoStats.has(key)) {
+        repoStats.set(key, {
+          repoOwner: pr.repoOwner,
+          repoName: pr.repoName,
+          lastActiveAt: session.startedAt,
+          sessionIds: new Set(),
+          totalDurationSecs: 0,
+          bpmSum: 0,
+          bpmCount: 0,
+          maxBpm: 0,
+          timeAboveThresholdSecs: 0,
+          timeBelowThresholdSecs: 0,
+          commits: 0,
+          linesAdded: 0,
+          linesRemoved: 0,
+          prsOpened: 0,
+          prsMerged: 0,
+          prsClosed: 0,
+          toolAttempts: 0,
+          toolAllowed: 0,
+          toolBlocked: 0,
+        });
+      }
+
+      const stats = repoStats.get(key)!;
+      if (pr.state === 'open') stats.prsOpened++;
+      else if (pr.state === 'merged') stats.prsMerged++;
+      else if (pr.state === 'closed') stats.prsClosed++;
+    }
+
+    // Add session-level stats to each repo touched
+    for (const repoKey of sessionRepos) {
+      const stats = repoStats.get(repoKey)!;
+      if (!stats.sessionIds.has(session.id)) {
+        stats.sessionIds.add(session.id);
+
+        if (session.summary) {
+          stats.totalDurationSecs += session.summary.durationSecs;
+          if (session.summary.avgBpm > 0) {
+            stats.bpmSum += session.summary.avgBpm * session.summary.durationSecs;
+            stats.bpmCount += session.summary.durationSecs;
+          }
+          if (session.summary.maxBpm > stats.maxBpm) {
+            stats.maxBpm = session.summary.maxBpm;
+          }
+          stats.timeAboveThresholdSecs += session.summary.timeAboveThresholdSecs;
+          stats.timeBelowThresholdSecs += session.summary.timeBelowThresholdSecs;
+        }
+
+        // Add tool attempts
+        for (const attempt of session.toolAttempts) {
+          stats.toolAttempts++;
+          if (attempt.allowed) stats.toolAllowed++;
+          else stats.toolBlocked++;
+        }
+      }
+    }
+  }
+
+  // Convert to array and sort
+  let projects = Array.from(repoStats.entries()).map(([key, stats]) => ({
+    repoFullName: key,
+    repoOwner: stats.repoOwner,
+    repoName: stats.repoName,
+    lastActiveAt: stats.lastActiveAt,
+    workout: {
+      totalDurationSecs: stats.totalDurationSecs,
+      sessionCount: stats.sessionIds.size,
+      avgBpm: stats.bpmCount > 0 ? Math.round(stats.bpmSum / stats.bpmCount) : 0,
+      maxBpm: stats.maxBpm,
+      timeAboveThresholdSecs: stats.timeAboveThresholdSecs,
+      timeBelowThresholdSecs: stats.timeBelowThresholdSecs,
+    },
+    coding: {
+      totalCommits: stats.commits,
+      linesAdded: stats.linesAdded,
+      linesRemoved: stats.linesRemoved,
+      prsOpened: stats.prsOpened,
+      prsMerged: stats.prsMerged,
+      prsClosed: stats.prsClosed,
+    },
+    tools: {
+      totalAttempts: stats.toolAttempts,
+      allowed: stats.toolAllowed,
+      blocked: stats.toolBlocked,
+      successRate:
+        stats.toolAllowed > 0 ? Math.round((stats.toolAllowed / stats.toolAttempts) * 100) / 100 : 0,
+    },
+  }));
+
+  // Sort
+  switch (sort) {
+    case 'time':
+      projects.sort((a, b) => b.workout.totalDurationSecs - a.workout.totalDurationSecs);
+      break;
+    case 'commits':
+      projects.sort((a, b) => b.coding.totalCommits - a.coding.totalCommits);
+      break;
+    case 'recent':
+    default:
+      projects.sort((a, b) => b.lastActiveAt.getTime() - a.lastActiveAt.getTime());
+  }
+
+  // Pagination
+  let startIndex = 0;
+  if (cursor) {
+    const cursorIndex = projects.findIndex((p) => p.repoFullName === cursor);
+    if (cursorIndex >= 0) startIndex = cursorIndex + 1;
+  }
+
+  const pageProjects = projects.slice(startIndex, startIndex + limit + 1);
+  const hasMore = pageProjects.length > limit;
+  const items = hasMore ? pageProjects.slice(0, -1) : pageProjects;
+  const nextCursor = hasMore ? items[items.length - 1]?.repoFullName : undefined;
+
+  return c.json({
+    projects: items.map((p) => ({
+      ...p,
+      lastActiveAt: p.lastActiveAt.toISOString(),
+    })),
+    hasMore,
+    nextCursor,
+  });
+});
+
+// Get single project detail
+workout.get('/stats/projects/:repoFullName', async (c) => {
+  const userId = c.get('userId');
+  const repoFullName = decodeURIComponent(c.req.param('repoFullName'));
+  const period = c.req.query('period') || 'all';
+  const periodStart = getPeriodStart(period);
+
+  const [repoOwner, repoName] = repoFullName.split('/');
+  if (!repoOwner || !repoName) {
+    return c.json({ error: 'Invalid repo format' }, 400);
+  }
+
+  // Build where clause for sessions
+  const sessionWhere: { userId: string; endedAt?: { not: null; gte?: Date } } = {
+    userId,
+    endedAt: { not: null },
+  };
+  if (periodStart) {
+    sessionWhere.endedAt = { not: null, gte: periodStart };
+  }
+
+  // Get sessions that touched this repo
+  const sessions = await prisma.workoutSession.findMany({
+    where: {
+      ...sessionWhere,
+      OR: [
+        { commits: { some: { repoOwner, repoName } } },
+        { pullRequests: { some: { repoOwner, repoName } } },
+      ],
+    },
+    include: {
+      summary: true,
+      commits: {
+        where: { repoOwner, repoName },
+      },
+      pullRequests: {
+        where: { repoOwner, repoName },
+      },
+      toolAttempts: true,
+    },
+    orderBy: { startedAt: 'desc' },
+  });
+
+  if (sessions.length === 0) {
+    return c.json({ error: 'Project not found' }, 404);
+  }
+
+  // Aggregate stats
+  let totalDurationSecs = 0;
+  let bpmSum = 0;
+  let bpmCount = 0;
+  let maxBpm = 0;
+  let minBpm = 999;
+  let timeAboveThresholdSecs = 0;
+  let timeBelowThresholdSecs = 0;
+  let totalCommits = 0;
+  let linesAdded = 0;
+  let linesRemoved = 0;
+  let prsOpened = 0;
+  let prsMerged = 0;
+  let prsClosed = 0;
+  let filesChanged = 0;
+  let toolAttempts = 0;
+  let toolAllowed = 0;
+  let toolBlocked = 0;
+  let toolSucceeded = 0;
+  let toolFailed = 0;
+  const toolCounts = new Map<string, number>();
+
+  for (const session of sessions) {
+    if (session.summary) {
+      totalDurationSecs += session.summary.durationSecs;
+      if (session.summary.avgBpm > 0) {
+        bpmSum += session.summary.avgBpm * session.summary.durationSecs;
+        bpmCount += session.summary.durationSecs;
+      }
+      if (session.summary.maxBpm > maxBpm) maxBpm = session.summary.maxBpm;
+      if (session.summary.minBpm > 0 && session.summary.minBpm < minBpm) {
+        minBpm = session.summary.minBpm;
+      }
+      timeAboveThresholdSecs += session.summary.timeAboveThresholdSecs;
+      timeBelowThresholdSecs += session.summary.timeBelowThresholdSecs;
+    }
+
+    totalCommits += session.commits.length;
+    for (const commit of session.commits) {
+      linesAdded += commit.linesAdded ?? 0;
+      linesRemoved += commit.linesRemoved ?? 0;
+    }
+
+    for (const pr of session.pullRequests) {
+      if (pr.state === 'open') prsOpened++;
+      else if (pr.state === 'merged') prsMerged++;
+      else if (pr.state === 'closed') prsClosed++;
+    }
+
+    for (const attempt of session.toolAttempts) {
+      toolAttempts++;
+      if (attempt.allowed) {
+        toolAllowed++;
+        if (attempt.succeeded === true) toolSucceeded++;
+        else if (attempt.succeeded === false) toolFailed++;
+      } else {
+        toolBlocked++;
+      }
+      toolCounts.set(attempt.toolName, (toolCounts.get(attempt.toolName) ?? 0) + 1);
+    }
+  }
+
+  const avgBpm = bpmCount > 0 ? Math.round(bpmSum / bpmCount) : 0;
+  if (minBpm === 999) minBpm = 0;
+
+  const topTools = Array.from(toolCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({ name, count }));
+
+  const successRate = toolAllowed > 0 ? Math.round((toolSucceeded / toolAllowed) * 100) / 100 : 0;
+
+  // Get files changed count
+  const filesResult = await prisma.sessionCommitFile.count({
+    where: {
+      commit: {
+        repoOwner,
+        repoName,
+        session: sessionWhere,
+      },
+    },
+  });
+  filesChanged = filesResult;
+
+  // Build chart data
+  const useDailyBuckets = period === '7d' || period === '30d';
+  const bucketMs = useDailyBuckets ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+  const buckets: Array<{
+    date: string;
+    durationSecs: number;
+    commits: number;
+    linesAdded: number;
+    linesRemoved: number;
+  }> = [];
+
+  const chartStart =
+    periodStart ?? new Date(sessions[sessions.length - 1]?.startedAt ?? new Date());
+  let bucketDate = new Date(chartStart);
+  bucketDate.setHours(0, 0, 0, 0);
+  const chartEnd = new Date();
+
+  while (bucketDate <= chartEnd) {
+    buckets.push({
+      date: bucketDate.toISOString().split('T')[0],
+      durationSecs: 0,
+      commits: 0,
+      linesAdded: 0,
+      linesRemoved: 0,
+    });
+    bucketDate = new Date(bucketDate.getTime() + bucketMs);
+  }
+
+  for (const session of sessions) {
+    const sessionDate = session.startedAt.toISOString().split('T')[0];
+    const bucket = buckets.find((b) => {
+      if (useDailyBuckets) return b.date === sessionDate;
+      const bDate = new Date(b.date);
+      const sDate = new Date(sessionDate);
+      return sDate >= bDate && sDate < new Date(bDate.getTime() + bucketMs);
+    });
+
+    if (bucket) {
+      bucket.durationSecs += session.summary?.durationSecs ?? 0;
+      bucket.commits += session.commits.length;
+      for (const commit of session.commits) {
+        bucket.linesAdded += commit.linesAdded ?? 0;
+        bucket.linesRemoved += commit.linesRemoved ?? 0;
+      }
+    }
+  }
+
+  // Recent sessions
+  const recentSessions = sessions.slice(0, 10).map((s) => ({
+    id: s.id,
+    startedAt: s.startedAt.toISOString(),
+    endedAt: s.endedAt?.toISOString() ?? null,
+    durationSecs: s.summary?.durationSecs ?? 0,
+    avgBpm: s.summary?.avgBpm ?? 0,
+    maxBpm: s.summary?.maxBpm ?? 0,
+    commits: s.commits.length,
+    linesAdded: s.commits.reduce((sum, c) => sum + (c.linesAdded ?? 0), 0),
+    linesRemoved: s.commits.reduce((sum, c) => sum + (c.linesRemoved ?? 0), 0),
+  }));
+
+  return c.json({
+    repoFullName,
+    repoOwner,
+    repoName,
+    htmlUrl: `https://github.com/${repoFullName}`,
+    lastActiveAt: sessions[0]?.startedAt.toISOString() ?? null,
+    workout: {
+      totalDurationSecs,
+      sessionCount: sessions.length,
+      avgBpm,
+      maxBpm,
+      minBpm,
+      timeAboveThresholdSecs,
+      timeBelowThresholdSecs,
+    },
+    coding: {
+      totalCommits,
+      linesAdded,
+      linesRemoved,
+      prsOpened,
+      prsMerged,
+      prsClosed,
+      filesChanged,
+    },
+    tools: {
+      totalAttempts: toolAttempts,
+      allowed: toolAllowed,
+      blocked: toolBlocked,
+      succeeded: toolSucceeded,
+      failed: toolFailed,
+      successRate,
+      topTools,
+    },
+    chart: { buckets },
+    recentSessions,
+    hasMoreSessions: sessions.length > 10,
+    sessionsCursor: sessions.length > 10 ? sessions[9].id : null,
+  });
+});
+
+// Get sessions for a specific project (paginated)
+workout.get('/stats/projects/:repoFullName/sessions', async (c) => {
+  const userId = c.get('userId');
+  const repoFullName = decodeURIComponent(c.req.param('repoFullName'));
+  const limit = parseInt(c.req.query('limit') || '20', 10);
+  const cursor = c.req.query('cursor');
+
+  const [repoOwner, repoName] = repoFullName.split('/');
+  if (!repoOwner || !repoName) {
+    return c.json({ error: 'Invalid repo format' }, 400);
+  }
+
+  const sessions = await prisma.workoutSession.findMany({
+    where: {
+      userId,
+      endedAt: { not: null },
+      OR: [
+        { commits: { some: { repoOwner, repoName } } },
+        { pullRequests: { some: { repoOwner, repoName } } },
+      ],
+    },
+    orderBy: { startedAt: 'desc' },
+    take: Math.min(limit, 50) + 1,
+    ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+    include: {
+      summary: true,
+      commits: {
+        where: { repoOwner, repoName },
+      },
+      pullRequests: {
+        where: { repoOwner, repoName },
+      },
+    },
+  });
+
+  const hasMore = sessions.length > limit;
+  const items = hasMore ? sessions.slice(0, -1) : sessions;
+  const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
+
+  return c.json({
+    sessions: items.map((s) => ({
+      id: s.id,
+      startedAt: s.startedAt.toISOString(),
+      endedAt: s.endedAt?.toISOString() ?? null,
+      durationSecs: s.summary?.durationSecs ?? 0,
+      avgBpm: s.summary?.avgBpm ?? 0,
+      maxBpm: s.summary?.maxBpm ?? 0,
+      minBpm: s.summary?.minBpm ?? 0,
+      commits: s.commits.length,
+      linesAdded: s.commits.reduce((sum, c) => sum + (c.linesAdded ?? 0), 0),
+      linesRemoved: s.commits.reduce((sum, c) => sum + (c.linesRemoved ?? 0), 0),
+      prs: s.pullRequests.length,
+    })),
+    hasMore,
+    nextCursor,
+  });
+});
+
 export { workout };
