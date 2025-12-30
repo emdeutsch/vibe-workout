@@ -7,8 +7,8 @@
     "services/*"
   ],
   "scripts": {
-    "dev": "supabase start && turbo run generate build --filter=@vibeworkout/db --filter=@vibeworkout/shared && npm run db:push && concurrently -n API,WORKER -c blue,magenta \"npm run api:dev\" \"npm run worker:dev\"",
-    "dev:services": "concurrently -n API,WORKER -c blue,magenta \"npm run api:dev\" \"npm run worker:dev\"",
+    "dev": "supabase start && turbo run generate build --filter=@vibeworkout/db --filter=@vibeworkout/shared && npm run db:push && npm run dev:services",
+    "dev:services": "doppler run --project viberunner --config dev -- concurrently -n API,WORKER -c blue,magenta \"npm run api:dev\" \"npm run worker:dev\"",
     "shared:build": "npm run build --workspace=@vibeworkout/shared",
     "db:build": "npm run build --workspace=@vibeworkout/db",
     "db:start": "supabase start && npm run db:generate && npm run db:build && npm run db:push",

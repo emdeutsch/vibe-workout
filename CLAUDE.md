@@ -1,5 +1,22 @@
 # Claude Code Project Instructions
 
+## Environment Variables
+
+Secrets are managed with [Doppler](https://doppler.com). Project: `viberunner`, config: `dev`.
+
+```bash
+# Pull secrets to local .env files
+./scripts/pull-secrets.sh
+
+# List available secrets
+doppler secrets --only-names -p viberunner -c dev
+```
+
+**Local vs Production:**
+
+- **Local**: Postgres runs via local Supabase Docker (`127.0.0.1:54422`)
+- **Production**: Hosted Supabase with pooled connections (DATABASE_URL) and direct connections (DIRECT_URL) for Prisma migrations
+
 ## Database Migrations
 
 Use Prisma migrations for all schema changes. See `docs/MIGRATION_WORKFLOW.md` for complete workflow.
